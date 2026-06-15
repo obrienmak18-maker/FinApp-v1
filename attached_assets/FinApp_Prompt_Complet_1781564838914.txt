@@ -1,0 +1,457 @@
+# 🏦 FinApp — Prompt Maître de Création Complète
+
+> Ce document est le prompt de référence complet pour recréer l'application **FinApp** de zéro dans son état le plus abouti.  
+> Il combine le cahier des charges initial et toutes les améliorations et décisions de design prises en cours de développement.
+
+---
+
+## 🎯 CONTEXTE ET RÔLE
+
+Tu es un **Développeur Full-Stack Expert** en React, Vite, Tailwind CSS et architectures **Local-First**.  
+Ta mission est de créer **"FinApp"**, une application de gestion financière personnelle **ultra-moderne, rapide et responsive**, destinée à être :
+- Publiée en **PWA (Progressive Web App)** sur Vercel / Netlify / GitHub Pages
+- Encapsulée sur **Mobile** (via Capacitor → APK Android)
+- Encapsulée sur **Desktop** (via Electron → EXE Windows)
+
+L'interface est **entièrement en Français**. Le design doit être **premium, épuré et wow** dès le premier regard.
+
+---
+
+## 🛠️ STACK TECHNIQUE
+
+| Couche | Technologie |
+|---|---|
+| Framework | React 19 + Vite |
+| Routage | react-router-dom v7 |
+| Styles | Tailwind CSS v4 (Mobile-first, dark mode) |
+| Base de données locale | Dexie.js v4 (IndexedDB) + dexie-react-hooks |
+| Graphiques | Recharts |
+| Sync | Firebase (Realtime Database) |
+| Icônes | Lucide-React |
+| QR Code affiché | qrcode.react |
+| QR Code scanné | html5-qrcode |
+| Dates | date-fns |
+| Exports | xlsx (Excel) + docx (Word) |
+| PWA | vite-plugin-pwa (manifest + service worker) |
+| Mobile | @capacitor/core + @capacitor/android |
+| Desktop | electron + electron-builder |
+
+---
+
+## 🎨 RÈGLES DE DESIGN & UI/UX OBLIGATOIRES
+
+### Palette & Thème
+- Support **Dark / Light mode** complet, activable par l'utilisateur.
+- Couleur primaire **configurable** par l'utilisateur (stockée en HSL dans les settings).
+- Fond : Glassmorphism avec `backdrop-blur` + gradients subtils + orbs animés en arrière-plan.
+- Typographie : Police **Inter** ou **Outfit** (Google Fonts), pas les polices navigateur par défaut.
+- Éviter les couleurs génériques (rouge/bleu/vert primaires). Utiliser des palettes HSL harmonieuses.
+
+### Couleurs des transactions (RÈGLE ABSOLUE)
+- **Revenus** → TOUJOURS en **Vert** (`text-emerald-500`, `bg-green-50`)
+- **Dépenses** → TOUJOURS en **Rouge** (`text-red-500`, `bg-red-50`)
+- Afficher uniquement des **valeurs positives** — jamais de signe négatif. Le code couleur suffit.
+
+### Layout
+- **Desktop (lg+)** : Sidebar fixe à gauche + contenu principal.
+- **Mobile** : Bottom Navigation + FAB (Floating Action Button).
+
+### Animations & Micro-interactions
+- **Transitions de pages** : Chaque changement de route doit avoir un effet `fadeUp` (translateY + opacity) — utiliser `key={location.pathname}` sur le conteneur principal.
+- **Modaux** : Entrée avec `zoomIn` (scale 0.95→1 + opacity).
+- **FAB** : Zoom au hover (`hover:scale-110`), rotation lors de l'ouverture du menu.
+- **Orbs** : Sphères colorées en fond qui bougent lentement en boucle (`animate-orb`).
+- **Boutons** : `active:scale-95` ou `active:scale-98` sur tous les boutons d'action.
+
+### FAB (Bouton +)
+- **Visible UNIQUEMENT sur la page `/transactions`**, pas ailleurs.
+- Au clic, ouvre un mini-menu avec 3 options : Ajouter une transaction, Créer une catégorie, Scanner une facture.
+
+---
+
+## 🗄️ SCHÉMA DE BASE DE DONNÉES (DEXIE.JS)
+
+### Version 1 (initiale)
+```js
+db.version(1).stores({
+  settings: 'id, username, pinCode, defaultCurrency, themeMode, customColors',
+  transactions: '++id, type, montant, devise, montantConverti, date, categorie, sousCategorie, item, tauxDuJour, imageFacture, statutRecurrent',
+  categories: '++id, type, nom, parentId',
+  budgets: '++id, categorie, plafond, montantActuel, mois, annee',
+  projects: '++id, titre, description, montantCible, montantActuel, type, statut'
+});
+```
+
+### Version 2 (migration)
+```js
+db.version(2).stores({
+  settings: 'id, username, pinCode, defaultCurrency, themeMode, customColors, aiPreferences',
+  transactions: '++id, type, montant, devise, montantConverti, date, categorie, sousCategorie, item, tauxDuJour, imageFacture, statutRecurrent',
+  categories: '++id, type, nom, parentId, emoji',
+  budgets: '++id, categorie, plafond, montantActuel, mois, annee',
+  projects: '++id, titre, description, montantCible, montantActuel, type, statut'
+}).upgrade(tx => {
+  return tx.table('categories').toCollection().modify(cat => {
+    if (!cat.emoji) cat.emoji = '';
+  });
+});
+```
+
+### Catégories par défaut (seed `db.on('populate', ...)`)
+Pré-remplir avec des catégories parentes et sous-catégories :
+- **Revenus** : Salaires & Revenus 💰, Investissements 📈, Autres Revenus 🎁 (avec sous-cat)
+- **Dépenses** : Alimentation 🍕, Transport 🚗, Logement 🏠, Loisirs 🎮, Santé 💊, Factures 📱, Habillement 👕, Éducation 📚 (avec sous-cat)
+
+---
+
+## 📱 FONCTIONNALITÉS COMPLÈTES
+
+### 1. Onboarding & Sécurité
+- **Écran de bienvenue** : Logo animé + étapes de configuration.
+- **Configuration** : Pseudo, Code PIN 4 chiffres (optionnel), Devise par défaut (USD, EUR, CDF, XAF…), Thème (Dark/Light).
+- **Écran de verrouillage** : Clavier PIN numérique stylé, affiché à chaque ouverture de l'app si un PIN est configuré. Afficher l'avatar/pseudo.
+
+---
+
+### 2. Dashboard
+- **Carte solde** : Solde total (Revenus – Dépenses), avec toggle show/hide du montant.
+- **Mini-cartes** : Total Revenus du mois / Total Dépenses du mois.
+- **Graphique** : BarChart ou AreaChart (Recharts) des 6 derniers mois.
+- **Top catégories** de dépenses (avec barre de progression colorée).
+- **Budgets actifs** : Afficher les budgets du mois courant avec indicateur de dépassement.
+- **Alerte solde** : Si le solde est insuffisant pour une dépense planifiée, afficher un avertissement visuel.
+
+---
+
+### 3. Transactions — Formulaire d'ajout (Entonnoir)
+Le formulaire est en entonnoir strict :
+
+**Étape 1 — Type** : Revenu ou Dépense (sélecteur visuel coloré).
+
+**Étape 2 — Catégorie** : Liste filtrée par type. Chaque catégorie affiche son emoji. Bouton inline "＋ Nouvelle catégorie" pour créer à la volée.
+
+**Étape 3 — Sous-catégorie** : Liste des enfants de la catégorie choisie. Peut être vide si la catégorie n'a pas de sous-catégories.
+
+**Étape 4 — Item** : Champ texte libre pour préciser (ex: "Tomates cerise").
+
+**Étape 5 — Montant & Devise** :
+- Saisie du montant + devise de la transaction (ex: 5000 CDF).
+- Conversion automatique en direct vers la devise par défaut via API taux de change.
+- **RÈGLE D'OR** : Le `tauxDuJour` est stocké dans chaque transaction. Les calculs passés ne changent JAMAIS même si le taux global évolue.
+
+**Étape 6 — Date** : Date picker (défaut = aujourd'hui).
+
+**Étape 7 — Scanner Facture (Bêta)** :
+- Bouton upload photo/fichier.
+- Simuler une analyse OCR/IA avec un délai (`setTimeout` 2–3s) qui extrait de fausses données et pré-remplit le formulaire.
+- Afficher une bannière bien visible : **"🧪 Scanner IA — Fonctionnalité en développement (Bêta)"**.
+
+#### Validation critique
+- **Impossibilité de dépenser plus que le solde disponible** : Si `montantConverti > soldeActuel`, bloquer la soumission et afficher un message d'erreur clair avec le solde disponible.
+
+---
+
+### 4. Gestion des Catégories (modal `AddCategoryModal`)
+- **Sélecteur de type** : Dépense / Revenu.
+- **Sélecteur d'emoji** : Grille d'emojis cliquables (30+ emojis). Bouton "Aucun emoji" pour vider.
+- **Champ nom** : Texte libre.
+- **Parent optionnel** : Dropdown des catégories parentes → permet de créer une **sous-catégorie**.
+- Vérification des doublons avant création.
+
+---
+
+### 5. Page Transactions
+- Liste chronologique de toutes les transactions.
+- Filtres : par type (tous/revenus/dépenses), par catégorie, par période (mois/semaine).
+- Chaque ligne : emoji de la catégorie + nom catégorie/sous-cat/item + date + montant coloré.
+- Suppression avec confirmation.
+- Bouton export en haut de page.
+
+---
+
+### 6. Budgets
+- Créer un budget par catégorie, pour un mois donné, avec un plafond.
+- Barre de progression colorée : vert si < 80%, orange si 80–100%, rouge si dépassé.
+- Afficher le montant dépensé vs le plafond.
+
+---
+
+### 7. Projets d'Épargne
+- Créer des cagnottes avec un objectif (titre, description, montant cible).
+- Alimenter progressivement (ajouter des versements).
+- Afficher la progression en pourcentage avec barre.
+
+---
+
+### 8. Assistant IA (Chat)
+- Interface de messagerie style chat moderne.
+- L'IA analyse **localement la base Dexie** pour répondre aux questions (pas de données envoyées en ligne si hors connexion).
+- **Mode Hybride** : Si l'utilisateur est en ligne → utiliser l'API Gemini pour des conseils enrichis. Si hors ligne → analyse locale seule.
+- **Format des réponses** : Conversationnel, en français, **sans headers Markdown** (`##`, `###`). Réponses courtes et naturelles.
+- **Mémoire adaptative** : L'IA mémorise les préférences (`aiPreferences` dans settings) et évolue selon les usages.
+- **Effet de frappe** : Les réponses de l'IA s'affichent **caractère par caractère** (35ms/caractère) avec un curseur clignotant.
+- **Text-to-Speech** : L'IA **parle** ses réponses via `window.speechSynthesis` en `fr-FR`. Bouton mute/unmute dans le header du chat.
+- **Quick prompts** : 4 chips de suggestions en début de conversation.
+
+---
+
+### 9. Synchronisation par QR Code
+- **Rôle Ordinateur (Hôte)** :
+  - Génère un `sessionId` unique (`finapp-sync-XXXXXXX`).
+  - Affiche un QR Code (via `qrcode.react`) contenant le `sessionId`.
+  - Pousse toute la base Dexie sur Firebase Realtime Database sous ce canal.
+  
+- **Rôle Mobile (Client)** :
+  - Saisie manuelle du code OU **scan du QR Code avec la caméra** (via `html5-qrcode`).
+  - Demande l'autorisation caméra au navigateur/OS.
+  - Si le scan réussit, remplit automatiquement le champ et rejoint la session.
+  - Si la caméra est refusée, afficher un message explicatif clair pour guider l'utilisateur.
+  
+- **Fusion intelligente** : Les transactions sont fusionnées sans doublons par comparaison de signatures. Les nouvelles écritures de chaque appareil sont ajoutées.
+
+- **Console de logs** : Afficher un terminal stylé (fond noir, texte vert) avec les étapes de synchronisation en temps réel.
+
+#### Configuration Firebase
+```js
+const firebaseConfig = {
+  apiKey: "AIzaSyAmbKOliv3RTdWI4RfYhi3zsZULpW05aFs",
+  authDomain: "finapp-a0ba6.firebaseapp.com",
+  projectId: "finapp-a0ba6",
+  storageBucket: "finapp-a0ba6.firebasestorage.app",
+  messagingSenderId: "3357518635",
+  appId: "1:3357518635:web:f87d9ca84a421f1817736e"
+};
+```
+
+---
+
+### 10. Paramètres
+- Modifier le pseudo, le thème (dark/light), la devise par défaut.
+- Choisir une **couleur primaire personnalisée** (palette de couleurs prédéfinies).
+- Activer/modifier/supprimer le code PIN.
+- **Exports** :
+  - Export Excel (`.xlsx`) : toutes les transactions du mois.
+  - Export Word (`.docx`) : rapport IA + tableau récapitulatif.
+- Informations de version et mentions légales.
+
+---
+
+### 11. Bouton ℹ️ Info (présent sur TOUS les onglets)
+- Petit bouton rond avec icône `Info` (Lucide) dans le header, visible sur chaque page.
+- Au clic, ouvre un **modal** avec :
+  - Le titre de la page.
+  - Une description courte et claire de la fonctionnalité de la page.
+- Le modal se ferme en cliquant en dehors ou sur "Compris !".
+- Se réinitialise automatiquement lors du changement de page.
+
+---
+
+## 🌐 PWA (Progressive Web App)
+
+Configurer via `vite-plugin-pwa` :
+```js
+// vite.config.js
+import { VitePWA } from 'vite-plugin-pwa';
+
+VitePWA({
+  registerType: 'autoUpdate',
+  includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
+  manifest: {
+    name: 'FinApp — Gestion Financière',
+    short_name: 'FinApp',
+    description: 'Gérez vos finances personnelles localement, en toute confidentialité.',
+    theme_color: '#6366f1',
+    background_color: '#0f172a',
+    display: 'standalone',
+    orientation: 'portrait',
+    scope: '/',
+    start_url: '/',
+    icons: [
+      { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' },
+      { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png' },
+      { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' }
+    ]
+  },
+  workbox: {
+    globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+    runtimeCaching: [{
+      urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
+      handler: 'CacheFirst',
+      options: { cacheName: 'google-fonts-cache', expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 } }
+    }]
+  }
+})
+```
+
+Ajouter dans `index.html` :
+```html
+<meta name="theme-color" content="#6366f1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+```
+
+---
+
+## 📦 PACKAGING
+
+### Capacitor (APK Android)
+```json
+// capacitor.config.json
+{
+  "appId": "com.finapp.local",
+  "appName": "FinApp",
+  "webDir": "dist",
+  "server": { "androidScheme": "https" },
+  "plugins": {
+    "Camera": { "permissions": ["camera"] }
+  },
+  "android": {
+    "allowMixedContent": true,
+    "backgroundColor": "#0f172a"
+  }
+}
+```
+
+### Electron (EXE Windows)
+```js
+// electron/main.js
+const { app, BrowserWindow } = require('electron');
+const path = require('path');
+
+function createWindow() {
+  const win = new BrowserWindow({
+    width: 1200, height: 800,
+    minWidth: 900, minHeight: 650,
+    titleBarStyle: 'hiddenInset',
+    webPreferences: { nodeIntegration: false, contextIsolation: true }
+  });
+  win.loadFile(path.join(__dirname, '../dist/index.html'));
+}
+
+app.whenReady().then(createWindow);
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+```
+
+### Scripts package.json
+```json
+"scripts": {
+  "dev": "vite",
+  "build": "vite build",
+  "preview": "vite preview",
+  "electron:start": "npm run build && electron .",
+  "electron:build": "npm run build && electron-builder --win --x64",
+  "cap:sync": "npm run build && npx cap sync android",
+  "cap:open": "npx cap open android"
+}
+```
+
+---
+
+## 📂 STRUCTURE DE FICHIERS
+
+```
+finapp/
+├── public/
+│   ├── favicon.ico
+│   ├── pwa-192x192.png
+│   └── pwa-512x512.png
+├── electron/
+│   └── main.js
+├── src/
+│   ├── main.jsx              # Point d'entrée React
+│   ├── App.jsx               # Router principal
+│   ├── index.css             # Design system global + animations
+│   ├── components/
+│   │   ├── Layout.jsx        # Layout principal (header + nav + outlet)
+│   │   ├── Sidebar.jsx       # Sidebar desktop
+│   │   ├── BottomNav.jsx     # Bottom nav mobile
+│   │   ├── FAB.jsx           # Floating Action Button (transactions only)
+│   │   └── AddCategoryModal.jsx  # Modal ajout catégorie avec emoji
+│   ├── pages/
+│   │   ├── Onboarding.jsx    # Setup initial
+│   │   ├── LockScreen.jsx    # Écran PIN
+│   │   ├── Dashboard.jsx     # Tableau de bord
+│   │   ├── Transactions.jsx  # Liste des transactions
+│   │   ├── AddTransactionModal.jsx  # Formulaire ajout transaction
+│   │   ├── Budgets.jsx       # Gestion budgets
+│   │   ├── Projects.jsx      # Projets d'épargne
+│   │   ├── AIChat.jsx        # Chat IA
+│   │   ├── Sync.jsx          # Synchronisation QR
+│   │   └── Settings.jsx      # Paramètres
+│   └── services/
+│       ├── db.js             # Dexie.js config + seed
+│       ├── ai.js             # Logique IA locale + Gemini API
+│       ├── firebase.js       # Firebase sync logic
+│       └── exchangeRate.js   # API taux de change
+├── capacitor.config.json
+├── vite.config.js
+├── tailwind.config.js
+├── package.json
+└── vercel.json               # { "rewrites": [{ "source": "/(.*)", "destination": "/" }] }
+```
+
+---
+
+## ✨ ANIMATIONS CSS (index.css — obligatoires)
+
+```css
+/* Transition de page — fadeUp */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fadeUp { animation: fadeUp 0.35s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+/* Zoom modal */
+@keyframes zoomIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.animate-zoomIn { animation: zoomIn 0.25s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+/* Float lent */
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50%       { transform: translateY(-12px); }
+}
+.animate-float { animation: float 4s ease-in-out infinite; }
+
+/* Orb d'arrière-plan */
+@keyframes orb {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%       { transform: translate(30px, -20px) scale(1.05); }
+  66%       { transform: translate(-15px, 15px) scale(0.97); }
+}
+.animate-orb   { animation: orb 14s ease-in-out infinite; }
+.animate-orb-2 { animation: orb 18s ease-in-out infinite reverse; }
+.animate-orb-3 { animation: orb 22s ease-in-out infinite; }
+```
+
+---
+
+## 🔧 RÈGLES D'EXÉCUTION
+
+1. **Commence** par `src/services/db.js` — le schéma Dexie exact avec migration v1→v2.
+2. **Design system** dans `src/index.css` — variables CSS, animations, classes utilitaires glass.
+3. **Layout** : `Layout.jsx` avec `key={location.pathname}` sur le conteneur `<Outlet>` pour les transitions.
+4. **FAB** : Visible UNIQUEMENT si `location.pathname === '/transactions'`.
+5. **Bouton ℹ️** : Dans le header du Layout, avec une map `PAGE_INFO` pour chaque route.
+6. **Validation solde** : Dans `AddTransactionModal`, avant la soumission d'une dépense, vérifier que `montantConverti <= soldeDisponible`.
+7. **Scanner facture** : Toujours afficher la bannière Bêta. Ne jamais présenter cette fonctionnalité comme complète.
+8. **IA** : Réponses sans `##`/`###`. Effet de frappe 35ms/char. TTS `fr-FR`. Bouton mute.
+9. **Sync** : Le mobile demande l'accès caméra. Gérer le refus avec un message clair.
+10. **PWA** : Service Worker + manifest + icônes. `vercel.json` pour SPA routing.
+11. **Code complet, modulaire, prêt à déployer** — pas de TODO, pas de mock non fonctionnel.
+
+---
+
+## 🚀 DÉPLOIEMENT CIBLE
+
+- **Web (PWA)** → `npm run build` → déployer le dossier `dist/` sur **Vercel** ou **Netlify**.
+- **Android (APK)** → `npx cap sync android` → ouvrir dans Android Studio → Build APK.
+- **Windows (EXE)** → `npm run electron:build` → installeur dans `release/`.
+
+---
+
+*Prompt généré le 15 juin 2026 — Version finale FinApp v1.0*

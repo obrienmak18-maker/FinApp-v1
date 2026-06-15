@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "FinApp — Gestion Financière"
+version = "1.0.0"
+id = "artifacts/finapp"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 21708
+
+[services.development]
+run = "pnpm --filter @workspace/finapp run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/finapp", "run", "build" ]
+publicDir = "artifacts/finapp/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "21708"
+BASE_PATH = "/"
