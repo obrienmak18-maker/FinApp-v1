@@ -23,7 +23,10 @@ function AppRoutes() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <div className="w-12 h-12 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+        <div className="relative">
+          <div className="w-12 h-12 border-2 border-primary/30 rounded-full" />
+          <div className="absolute inset-0 w-12 h-12 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+        </div>
       </div>
     );
   }
@@ -72,11 +75,24 @@ function App() {
             <div className="min-h-screen bg-background text-foreground relative overflow-hidden">
               {/* Animated background orbs */}
               <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden">
-                <div className="absolute top-1/4 left-1/4 w-72 h-72 bg-primary/20 rounded-full blur-3xl animate-orb opacity-40 dark:opacity-20" />
-                <div className="absolute top-1/2 right-1/4 w-80 h-80 bg-violet-500/15 rounded-full blur-3xl animate-orb-2 opacity-30 dark:opacity-15" />
-                <div className="absolute bottom-1/4 left-1/2 w-96 h-96 bg-indigo-500/10 rounded-full blur-3xl animate-orb-3 opacity-20 dark:opacity-10" />
+                {/* Primary orb — top left */}
+                <div className="absolute top-[-10%] left-[-5%] w-[500px] h-[500px] rounded-full blur-[120px] animate-orb"
+                  style={{ background: 'radial-gradient(circle, hsl(239 84% 67% / 0.18), transparent 70%)' }} />
+                {/* Violet orb — top right */}
+                <div className="absolute top-[5%] right-[-8%] w-[400px] h-[400px] rounded-full blur-[100px] animate-orb-2"
+                  style={{ background: 'radial-gradient(circle, hsl(271 91% 65% / 0.13), transparent 70%)' }} />
+                {/* Teal orb — bottom center */}
+                <div className="absolute bottom-[-5%] left-[40%] w-[450px] h-[450px] rounded-full blur-[130px] animate-orb-3"
+                  style={{ background: 'radial-gradient(circle, hsl(239 80% 55% / 0.10), transparent 70%)' }} />
+                {/* Subtle noise texture overlay */}
+                <div className="absolute inset-0 opacity-[0.015]"
+                  style={{
+                    backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
+                    backgroundSize: '200px 200px',
+                  }}
+                />
               </div>
-              <div className="relative z-10">
+              <div className="relative z-10 min-h-screen">
                 <AppRoutes />
               </div>
             </div>
