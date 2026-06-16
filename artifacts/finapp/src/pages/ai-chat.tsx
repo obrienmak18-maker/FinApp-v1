@@ -57,11 +57,28 @@ export default function AIChat() {
   const [loading, setLoading] = useState(false);
   const [muted, setMuted] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
+  const [onlineStatus, setOnlineStatus] = useState(navigator.onLine);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  useEffect(() => {
+    const handleOnline = () => setOnlineStatus(true);
+    const handleOffline = () => setOnlineStatus(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  const hasGeminiKey = Boolean(import.meta.env.VITE_GEMINI_API_KEY);
+  const aiStatusLabel = onlineStatus && hasGeminiKey
+    ? 'En ligne — Gemini activé'
+    : 'Hors ligne ou API indisponible — Analyse locale';
 
   const speak = (text: string) => {
     if (muted || !window.speechSynthesis) return;

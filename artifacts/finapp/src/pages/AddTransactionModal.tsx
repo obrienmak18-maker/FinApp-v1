@@ -34,9 +34,11 @@ export default function AddTransactionModal({ open, onClose }: AddTransactionMod
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [converting, setConverting] = useState(false);
   const [error, setError] = useState('');
+  // showAddCat drives AddCategoryModal — when true, parent dialog is hidden to avoid Radix focus-trap clash
   const [showAddCat, setShowAddCat] = useState(false);
   const [scanLoading, setScanLoading] = useState(false);
   const [scanDone, setScanDone] = useState(false);
+  const [prevCatCount, setPrevCatCount] = useState(0);
 
   const allTransactions = useLiveQuery(() => db.transactions.toArray()) || [];
   const balance = allTransactions.reduce((acc, t) =>
@@ -51,6 +53,20 @@ export default function AddTransactionModal({ open, onClose }: AddTransactionMod
     () => categorieId ? db.categories.where('parentId').equals(categorieId).toArray() : Promise.resolve([] as import('../services/db').Category[]),
     [categorieId]
   ) || [];
+
+  // Auto-select newly created category after AddCategoryModal closes
+  useEffect(() => {
+    if (parentCategories.length > prevCatCount && prevCatCount > 0) {
+      const newest = [...parentCategories].sort((a, b) => (b.id ?? 0) - (a.id ?? 0))[0];
+      if (newest) {
+        setCategorie(newest.nom);
+        setCategorieId(newest.id);
+        setSousCategorie('');
+      }
+    }
+    setPrevCatCount(parentCategories.length);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parentCategories.length]);
 
   useEffect(() => {
     if (montant && devise && defaultCurrency) {
@@ -124,7 +140,8 @@ export default function AddTransactionModal({ open, onClose }: AddTransactionMod
 
   return (
     <>
-      <Dialog open={open} onOpenChange={o => { if (!o) { handleReset(); onClose(); } }}>
+      {/* Parent dialog — hidden while AddCategoryModal is open to prevent Radix focus-trap conflict */}
+      <Dialog open={open && !showAddCat} onOpenChange={o => { if (!o) { handleReset(); onClose(); } }}>
         <DialogContent className="animate-zoomIn sm:max-w-lg bg-card/95 backdrop-blur-xl border-card-border max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Nouvelle transaction</DialogTitle>
@@ -322,6 +339,9 @@ export default function AddTransactionModal({ open, onClose }: AddTransactionMod
         </DialogContent>
       </Dialog>
 
+      {/* AddCategoryModal is rendered OUTSIDE the parent Dialog to avoid Radix focus-trap conflicts.
+          When showAddCat is true, the parent dialog is temporarily hidden (open={open && !showAddCat})
+          so both dialogs never coexist, eliminating the input-blocking bug. */}
       <AddCategoryModal
         open={showAddCat}
         onClose={() => setShowAddCat(false)}

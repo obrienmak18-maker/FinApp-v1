@@ -14,7 +14,7 @@ const navItems = [
   { path: '/settings', icon: Settings, label: 'Paramètres' },
 ];
 
-const mobileNavItems = navItems.slice(0, 5);
+const mobileNavItems = navItems;
 
 const PAGE_LABELS: Record<string, string> = {
   '/dashboard': 'Tableau de bord',
@@ -110,14 +110,14 @@ export default function Layout() {
       </div>
 
       {/* ── Mobile Bottom Nav ── */}
-      <div className="lg:hidden fixed bottom-0 left-0 right-0 h-16 glass-strong border-t border-card-border/60 flex items-center justify-around px-1 z-30">
+      <div className="lg:hidden fixed bottom-0 left-0 right-0 h-16 glass-strong border-t border-card-border/60 flex items-center overflow-x-auto px-1 z-30">
         {mobileNavItems.map(item => {
           const active = isActive(item.path);
           return (
             <button
               key={item.path}
               onClick={() => navigate(item.path)}
-              className={`flex flex-col items-center justify-center flex-1 h-full space-y-1 transition-all duration-200 ${
+              className={`flex flex-col items-center justify-center flex-shrink-0 min-w-[4.5rem] h-full gap-1 px-2 transition-all duration-200 ${
                 active ? 'text-primary' : 'text-muted-foreground'
               }`}
               data-testid={`mobile-nav-${item.path.replace('/', '')}`}
@@ -125,7 +125,7 @@ export default function Layout() {
               <div className={`p-1 rounded-lg transition-all ${active ? 'bg-primary/15' : ''}`}>
                 <item.icon className={`h-5 w-5 transition-all duration-200 ${active ? 'scale-110' : ''}`} />
               </div>
-              <span className={`text-[9px] font-medium leading-none ${active ? 'opacity-100' : 'opacity-60'}`}>
+              <span className={`text-[8px] font-medium leading-none ${active ? 'opacity-100' : 'opacity-60'}`}>
                 {item.label.split(' ')[0]}
               </span>
             </button>

@@ -143,34 +143,111 @@ export default function Sync() {
       let data: { transactions?: object[]; categories?: object[]; budgets?: object[]; projects?: object[] } | null = null;
 
       if (backend === 'supabase') {
-        add('Récupération via Supabase…');
+        add('Récupération initiale via Supabase…');
         data = await supabasePullSession(inputCode);
+        
+        if (data) {
+          add('✓ Session trouvée ! Activation du Temps Réel...');
+          
+          // 🚀 Activation de l'écoute en temps réel avec Supabase
+          if (supabase) {
+            supabase
+              .channel(`sync-${inputCode}`)
+              .on(
+                'postgres_changes',
+                {
+                  event: 'UPDATE',
+                  schema: 'public',
+                  table: 'sync_sessions',
+                  filter: `session_id=eq.${inputCode}`
+                },
+                async (payload) => {
+                  add('⚡ Synchronisation en direct : Nouvelles données reçues !');
+                  const newData = payload.new.payload;
+                  
+                  // Met à jour les données dans IndexedDB instantanément
+                  if (newData) {
+                    // Fusionner les transactions
+                    const localTx = await db.transactions.toArray();
+                    const remoteTx = (newData.transactions || []) as typeof localTx;
+                    let txAdded = 0;
+                    for (const rt of remoteTx) {
+                      const dup = localTx.some(lt => lt.date === rt.date && lt.montant === rt.montant && lt.categorie === rt.categorie);
+                      if (!dup) {
+                        const { id, ...rest } = rt;
+                        await db.transactions.add(rest);
+                        txAdded++;
+                      }
+                    }
+                    if (txAdded > 0) add(`  → ${txAdded} transactions ajoutées`);
+                    
+                    // Fusionner les catégories
+                    const localCat = await db.categories.toArray();
+                    const remoteCat = (newData.categories || []) as typeof localCat;
+                    for (const rc of remoteCat) {
+                      const exists = localCat.some(lc => lc.nom === rc.nom);
+                      if (!exists) {
+                        const { id, ...rest } = rc;
+                        await db.categories.add(rest);
+                      }
+                    }
+                  }
+                }
+              )
+              .subscribe((status) => {
+                if (status === 'SUBSCRIBED') {
+                  add('🔌 Connexion en direct établie avec succès !');
+                }
+              });
+          }
+
+          // Appliquer les données initiales récupérées
+          const localTx = await db.transactions.toArray();
+          const remoteTx = (data.transactions || []) as typeof localTx;
+          let added = 0;
+          const merged = [...localTx];
+          for (const rt of remoteTx) {
+            const dup = localTx.some(lt => lt.date === rt.date && lt.montant === rt.montant && lt.categorie === rt.categorie);
+            if (!dup) { merged.push(rt); added++; }
+          }
+          await db.transactions.clear();
+          for (const t of merged) {
+            const { id, ...rest } = t;
+            await db.transactions.add(rest);
+          }
+          add(`${added} nouvelles transactions ajoutées.`);
+          add('✓ Synchronisation initialisée !');
+          setDone(true);
+        } else {
+          add('Session introuvable sur Supabase.');
+          setSyncing(false);
+        }
       } else {
         add('Récupération via Firebase…');
         const snap = await get(ref(firebaseDb, `sessions/${inputCode}`));
         if (!snap.exists()) { add('Session introuvable.'); setSyncing(false); return; }
         data = snap.val();
-      }
 
-      if (!data) { add('Session introuvable ou expirée.'); setSyncing(false); return; }
+        if (!data) { add('Session introuvable ou expirée.'); setSyncing(false); return; }
 
-      add('Données reçues. Fusion en cours…');
-      const localTx = await db.transactions.toArray();
-      const remoteTx = (data.transactions || []) as typeof localTx;
-      let added = 0;
-      const merged = [...localTx];
-      for (const rt of remoteTx) {
-        const dup = localTx.some(lt => lt.date === rt.date && lt.montant === rt.montant && lt.categorie === rt.categorie);
-        if (!dup) { merged.push(rt); added++; }
+        add('Données reçues. Fusion en cours…');
+        const localTx = await db.transactions.toArray();
+        const remoteTx = (data.transactions || []) as typeof localTx;
+        let added = 0;
+        const merged = [...localTx];
+        for (const rt of remoteTx) {
+          const dup = localTx.some(lt => lt.date === rt.date && lt.montant === rt.montant && lt.categorie === rt.categorie);
+          if (!dup) { merged.push(rt); added++; }
+        }
+        await db.transactions.clear();
+        for (const t of merged) {
+          const { id, ...rest } = t;
+          await db.transactions.add(rest);
+        }
+        add(`${added} nouvelles transactions ajoutées.`);
+        add('✓ Synchronisé via Firebase !');
+        setDone(true);
       }
-      await db.transactions.clear();
-      for (const t of merged) {
-        const { id, ...rest } = t;
-        await db.transactions.add(rest);
-      }
-      add(`${added} nouvelles transactions ajoutées.`);
-      add('✓ Synchronisation terminée !');
-      setDone(true);
     } catch (e) {
       if (e instanceof SupabaseSetupError) {
         add('⚠ Table Supabase manquante — relancez avec Firebase.');

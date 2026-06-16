@@ -5,6 +5,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppProvider, useAppContext } from "./context/AppContext";
 
 import Layout from "./components/Layout";
+import PWAInstallBanner from "./components/PWAInstallBanner";
 import Dashboard from "./pages/dashboard";
 import Onboarding from "./pages/onboarding";
 import Lock from "./pages/lock";
@@ -98,6 +99,7 @@ function App() {
             </div>
           </BrowserRouter>
         </AppProvider>
+        <PWAInstallBanner />
         <Toaster />
       </TooltipProvider>
     </QueryClientProvider>
