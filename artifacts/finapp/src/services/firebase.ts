@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, set, get } from 'firebase/database';
+import { getDatabase, ref, set, get, onValue } from 'firebase/database';
 
 const firebaseConfig = {
   apiKey: "AIzaSyAmbKOliv3RTdWI4RfYhi3zsZULpW05aFs",
@@ -13,7 +13,7 @@ const firebaseConfig = {
 
 export const firebaseApp = initializeApp(firebaseConfig);
 export const firebaseDb = getDatabase(firebaseApp);
-export { ref, set, get };
+export { ref, set, get, onValue };
 
 export function generateSessionId(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';

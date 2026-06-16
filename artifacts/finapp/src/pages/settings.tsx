@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { db } from '../services/db';
 import { useAppContext } from '../context/AppContext';
 import { Button } from '@/components/ui/button';
@@ -33,6 +33,12 @@ export default function Settings() {
   const [showPinModal, setShowPinModal] = useState(false);
   const [username, setUsername] = useState(settings?.username || '');
   const [currency, setCurrency] = useState(settings?.defaultCurrency || 'EUR');
+
+  useEffect(() => {
+    if (!settings) return;
+    setUsername(settings.username || '');
+    setCurrency(settings.defaultCurrency || 'EUR');
+  }, [settings]);
   const [newPin, setNewPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
   const [pinError, setPinError] = useState('');

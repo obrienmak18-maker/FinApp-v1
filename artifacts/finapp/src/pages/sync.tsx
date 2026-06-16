@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { db } from '../services/db';
-import { firebaseDb, ref, set, get, generateSessionId, sanitizeForFirebase } from '../services/firebase';
+import { firebaseDb, ref, set, get, onValue, generateSessionId, sanitizeForFirebase } from '../services/firebase';
 import {
+  supabase,
   supabasePushSession, supabasePullSession, SUPABASE_AVAILABLE,
   supabaseCheckReady, SupabaseSetupError,
 } from '../services/supabase';
@@ -45,6 +46,8 @@ export default function Sync() {
   const scannerRef = useRef<HTMLDivElement>(null);
   const qrScannerRef = useRef<unknown>(null);
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const supabaseChannelRef = useRef<any>(null);
+  const firebaseUnsubscribeRef = useRef<(() => void) | null>(null);
 
   // Determine active backend on mount
   useEffect(() => {
@@ -56,7 +59,19 @@ export default function Sync() {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
 
-  useEffect(() => { return () => stopScanner(); }, []);
+  useEffect(() => {
+    return () => {
+      stopScanner();
+      if (supabaseChannelRef.current) {
+        try { supabaseChannelRef.current.unsubscribe(); } catch { /* ignore */ }
+        supabaseChannelRef.current = null;
+      }
+      if (firebaseUnsubscribeRef.current) {
+        try { firebaseUnsubscribeRef.current(); } catch { /* ignore */ }
+        firebaseUnsubscribeRef.current = null;
+      }
+    };
+  }, []);
 
   const stopScanner = () => {
     if (qrScannerRef.current) {
@@ -151,8 +166,12 @@ export default function Sync() {
           
           // 🚀 Activation de l'écoute en temps réel avec Supabase
           if (supabase) {
-            supabase
-              .channel(`sync-${inputCode}`)
+            if (supabaseChannelRef.current) {
+              try { supabaseChannelRef.current.unsubscribe(); } catch { /* ignore */ }
+            }
+            const channel = supabase.channel(`sync-${inputCode}`);
+            supabaseChannelRef.current = channel;
+            channel
               .on(
                 'postgres_changes',
                 {
@@ -163,35 +182,34 @@ export default function Sync() {
                 },
                 async (payload) => {
                   add('⚡ Synchronisation en direct : Nouvelles données reçues !');
-                  const newData = payload.new.payload;
-                  
-                  // Met à jour les données dans IndexedDB instantanément
-                  if (newData) {
-                    // Fusionner les transactions
-                    const localTx = await db.transactions.toArray();
-                    const remoteTx = (newData.transactions || []) as typeof localTx;
-                    let txAdded = 0;
-                    for (const rt of remoteTx) {
-                      const dup = localTx.some(lt => lt.date === rt.date && lt.montant === rt.montant && lt.categorie === rt.categorie);
-                      if (!dup) {
-                        const { id, ...rest } = rt;
-                        await db.transactions.add(rest);
-                        txAdded++;
-                      }
-                    }
-                    if (txAdded > 0) add(`  → ${txAdded} transactions ajoutées`);
-                    
-                    // Fusionner les catégories
-                    const localCat = await db.categories.toArray();
-                    const remoteCat = (newData.categories || []) as typeof localCat;
-                    for (const rc of remoteCat) {
-                      const exists = localCat.some(lc => lc.nom === rc.nom);
-                      if (!exists) {
-                        const { id, ...rest } = rc;
-                        await db.categories.add(rest);
-                      }
+                  const newData = payload.new?.payload;
+                  if (!newData) return;
+
+                  const localTx = await db.transactions.toArray();
+                  const remoteTx = (newData.transactions || []) as typeof localTx;
+                  let txAdded = 0;
+                  for (const rt of remoteTx) {
+                    const dup = localTx.some(lt => lt.date === rt.date && lt.montant === rt.montant && lt.categorie === rt.categorie);
+                    if (!dup) {
+                      const { id, ...rest } = rt;
+                      await db.transactions.add(rest);
+                      txAdded++;
                     }
                   }
+                  if (txAdded > 0) add(`  → ${txAdded} transactions ajoutées`);
+
+                  const localCat = await db.categories.toArray();
+                  const remoteCat = (newData.categories || []) as typeof localCat;
+                  let catAdded = 0;
+                  for (const rc of remoteCat) {
+                    const exists = localCat.some(lc => lc.nom === rc.nom);
+                    if (!exists) {
+                      const { id, ...rest } = rc;
+                      await db.categories.add(rest);
+                      catAdded++;
+                    }
+                  }
+                  if (catAdded > 0) add(`  → ${catAdded} catégories ajoutées`);
                 }
               )
               .subscribe((status) => {
@@ -245,6 +263,36 @@ export default function Sync() {
           await db.transactions.add(rest);
         }
         add(`${added} nouvelles transactions ajoutées.`);
+
+        if (firebaseUnsubscribeRef.current) {
+          try { firebaseUnsubscribeRef.current(); } catch { /* ignore */ }
+          firebaseUnsubscribeRef.current = null;
+        }
+
+        let isInitialFire = true;
+        firebaseUnsubscribeRef.current = onValue(ref(firebaseDb, `sessions/${inputCode}`), async (snapshot) => {
+          if (isInitialFire) {
+            isInitialFire = false;
+            return;
+          }
+          const newData = snapshot.val();
+          if (!newData) return;
+
+          add('⚡ Synchronisation en direct : Nouvelles données reçues !');
+          const liveLocalTx = await db.transactions.toArray();
+          const liveRemoteTx = (newData.transactions || []) as typeof liveLocalTx;
+          let liveAdded = 0;
+          for (const rt of liveRemoteTx) {
+            const dup = liveLocalTx.some(lt => lt.date === rt.date && lt.montant === rt.montant && lt.categorie === rt.categorie);
+            if (!dup) {
+              const { id, ...rest } = rt;
+              await db.transactions.add(rest);
+              liveAdded++;
+            }
+          }
+          if (liveAdded > 0) add(`  → ${liveAdded} transactions ajoutées`);
+        });
+
         add('✓ Synchronisé via Firebase !');
         setDone(true);
       }

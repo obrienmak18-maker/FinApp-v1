@@ -37,7 +37,7 @@ export default function Layout() {
   return (
     <div className="flex h-screen bg-background overflow-hidden">
       {/* ── Desktop Sidebar ── */}
-      <aside className="hidden lg:flex w-60 flex-col glass-strong border-r border-card-border/60 flex-shrink-0 animate-slideRight z-20">
+      <aside className="hidden md:flex w-60 flex-col glass-strong border-r border-card-border/60 flex-shrink-0 animate-slideRight z-20">
         {/* Logo */}
         <div className="p-5 pb-4 border-b border-card-border/40">
           <div className="flex items-center gap-3">
@@ -110,7 +110,7 @@ export default function Layout() {
       </div>
 
       {/* ── Mobile Bottom Nav ── */}
-      <div className="lg:hidden fixed bottom-0 left-0 right-0 h-16 glass-strong border-t border-card-border/60 flex items-center overflow-x-auto px-1 z-30">
+      <div className="md:hidden fixed bottom-0 left-0 right-0 h-16 glass-strong border-t border-card-border/60 flex items-center overflow-x-auto px-1 z-30">
         {mobileNavItems.map(item => {
           const active = isActive(item.path);
           return (
