@@ -4,12 +4,10 @@ import { useAppContext } from '../context/AppContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Info, Moon, Sun, Download, FileText, Trash2, Lock, Unlock } from 'lucide-react';
+import { Info, Moon, Sun, Download, FileText, Trash2, Lock, Unlock, Fingerprint } from 'lucide-react';
 import InfoModal from '../components/InfoModal';
 import { useToast } from '@/hooks/use-toast';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import * as XLSX from 'xlsx';
-import { Document, Packer, Paragraph, TextRun, HeadingLevel } from 'docx';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 
@@ -29,7 +27,6 @@ const COLOR_OPTIONS = [
 export default function Settings() {
   const { settings, updateSettings, theme, toggleTheme, primaryColor, setPrimaryColor } = useAppContext();
   const { toast } = useToast();
-  const [showInfo, setShowInfo] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
   const [username, setUsername] = useState(settings?.username || '');
   const [currency, setCurrency] = useState(settings?.defaultCurrency || 'EUR');
@@ -64,6 +61,7 @@ export default function Settings() {
   };
 
   const handleExportExcel = async () => {
+    const XLSX = await import('xlsx');
     const transactions = await db.transactions.toArray();
     const data = transactions.map(t => ({
       Date: t.date, Type: t.type, Catégorie: t.categorie,
@@ -79,6 +77,8 @@ export default function Settings() {
   };
 
   const handleExportWord = async () => {
+    const docx = await import('docx');
+    const { Document, Packer, Paragraph, TextRun, HeadingLevel } = docx;
     const transactions = await db.transactions.toArray();
     const revenus = transactions.filter(t => t.type === 'revenu').reduce((s, t) => s + t.montantConverti, 0);
     const depenses = transactions.filter(t => t.type === 'depense').reduce((s, t) => s + t.montantConverti, 0);
@@ -117,9 +117,7 @@ export default function Settings() {
     <div className="p-4 md:p-6 animate-fadeUp space-y-6">
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-bold tracking-tight">Paramètres</h1>
-        <Button variant="ghost" size="icon" onClick={() => setShowInfo(true)} data-testid="btn-info">
-          <Info className="h-4 w-4" />
-        </Button>
+        <InfoModal title="Paramètres" description="Personnalisez votre profil, thème, couleur principale et gérez la sécurité de l'application. Exportez vos données en Excel ou Word." />
       </header>
 
       {/* Profile */}
@@ -186,6 +184,28 @@ export default function Settings() {
             Modifier
           </Button>
         </div>
+        {settings?.pinCode && (
+          <div className="flex items-center justify-between pt-3 border-t border-card-border/40 animate-fadeIn">
+            <div className="flex items-center gap-2">
+              <Fingerprint className="h-4 w-4 text-primary" />
+              <span className="text-sm font-medium">Déverrouillage biométrique</span>
+            </div>
+            <button
+              onClick={async () => {
+                await updateSettings({ biometricsEnabled: !settings.biometricsEnabled });
+                toast({
+                  title: !settings.biometricsEnabled ? "Biométrie activée" : "Biométrie désactivée",
+                  description: !settings.biometricsEnabled 
+                    ? "Vous pouvez maintenant utiliser l'empreinte/visage pour déverrouiller." 
+                    : "Déverrouillage biométrique désactivé."
+                });
+              }}
+              className={`w-11 h-6 rounded-full transition-colors relative ${settings.biometricsEnabled ? 'bg-primary' : 'bg-muted'}`}
+            >
+              <div className={`w-4 h-4 rounded-full bg-white absolute top-1 transition-transform duration-200 ${settings.biometricsEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+            </button>
+          </div>
+        )}
       </section>
 
       {/* Exports */}
@@ -199,6 +219,40 @@ export default function Settings() {
         </Button>
       </section>
 
+      {/* User Guide */}
+      <section className="p-4 rounded-xl bg-card/50 backdrop-blur-sm border border-card-border space-y-4">
+        <h2 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">Guide d'utilisation</h2>
+        <div className="space-y-3.5 text-sm text-foreground/90">
+          <div className="p-3 bg-muted/30 rounded-xl space-y-1">
+            <h3 className="font-semibold text-primary">📝 Enregistrer vos opérations</h3>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Dans l'onglet <strong>Transactions</strong>, cliquez sur le bouton <strong>+</strong> pour ajouter une opération. Suivez les étapes simples : choisissez le type, sélectionnez la catégorie, précisez l'article, saisissez le montant et validez.
+            </p>
+          </div>
+
+          <div className="p-3 bg-muted/30 rounded-xl space-y-1">
+            <h3 className="font-semibold text-primary">🎯 Suivre un budget</h3>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Fixez-vous des limites dans l'onglet <strong>Budgets</strong>. Choisissez une catégorie et un montant maximum pour le mois. Si vous respectez tous vos budgets à la fin du mois, l'application vous célébrera avec des confettis !
+            </p>
+          </div>
+
+          <div className="p-3 bg-muted/30 rounded-xl space-y-1">
+            <h3 className="font-semibold text-primary">📲 Synchroniser plusieurs appareils</h3>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Pour partager vos comptes avec un conjoint ou un autre téléphone, allez dans l'onglet <strong>Synchronisation</strong>. Créez un groupe, puis recopiez le code sur le deuxième appareil pour lier vos comptes de manière permanente.
+            </p>
+          </div>
+
+          <div className="p-3 bg-muted/30 rounded-xl space-y-1">
+            <h3 className="font-semibold text-primary">💬 Discuter avec Sofia, votre assistante</h3>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Dans l'onglet <strong>Assistant IA</strong>, vous pouvez poser des questions en français simple (par exemple : "Combien ai-je dépensé ce mois-ci ?"). Sofia vous répondra comme une amie bienveillante, avec des conseils pratiques.
+            </p>
+          </div>
+        </div>
+      </section>
+
       {/* App info */}
       <section className="p-4 rounded-xl bg-card/50 backdrop-blur-sm border border-card-border">
         <h2 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider mb-3">À propos</h2>
@@ -206,7 +260,7 @@ export default function Settings() {
         <p className="text-xs text-muted-foreground mt-1">Toutes vos données sont stockées localement sur votre appareil.</p>
       </section>
 
-      <InfoModal open={showInfo} onClose={() => setShowInfo(false)} title="Paramètres" description="Personnalisez votre profil, thème, couleur principale et gérez la sécurité de l'application. Exportez vos données en Excel ou Word." />
+      {/* Tooltip in header */}
 
       <Dialog open={showPinModal} onOpenChange={o => !o && setShowPinModal(false)}>
         <DialogContent className="animate-zoomIn bg-card/95 backdrop-blur-xl border-card-border sm:max-w-xs">

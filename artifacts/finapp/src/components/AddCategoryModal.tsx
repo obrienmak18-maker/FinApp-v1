@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { X } from 'lucide-react';
+import { useToast } from '@/hooks/use-toast';
 
 const EMOJIS = [
   '💰','💸','💳','🏦','📊','📈','📉','💹','🎯','🏆',
@@ -18,9 +19,11 @@ interface AddCategoryModalProps {
   open: boolean;
   onClose: () => void;
   defaultType?: 'revenu' | 'depense';
+  onCreated?: (category: Category) => void;
 }
 
-export default function AddCategoryModal({ open, onClose, defaultType = 'depense' }: AddCategoryModalProps) {
+export default function AddCategoryModal({ open, onClose, defaultType = 'depense', onCreated }: AddCategoryModalProps) {
+  const { toast } = useToast();
   const [type, setType] = useState<'revenu' | 'depense'>(defaultType);
   const [nom, setNom] = useState('');
   const [emoji, setEmoji] = useState('');
@@ -37,8 +40,18 @@ export default function AddCategoryModal({ open, onClose, defaultType = 'depense
     const exists = await db.categories.where('nom').equalsIgnoreCase(nom.trim()).count();
     if (exists > 0) { setError('Cette catégorie existe déjà.'); return; }
     
-    await db.categories.add({ type, nom: nom.trim(), emoji, parentId });
+    const newId = await db.categories.add({ type, nom: nom.trim(), emoji, parentId });
+    const createdCat = { id: newId, type, nom: nom.trim(), emoji, parentId };
+    
+    toast({
+      title: 'Catégorie créée',
+      description: `La catégorie "${nom.trim()}" a été créée avec succès.`
+    });
+    
     setNom(''); setEmoji(''); setParentId(undefined); setError('');
+    if (onCreated) {
+      onCreated(createdCat);
+    }
     onClose();
   };
 

@@ -2,9 +2,7 @@ import React, { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../services/db';
 import { useAppContext } from '../context/AppContext';
-import {
-  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
-} from 'recharts';
+import MiniAreaChart, { ChartDataPoint } from '../components/MiniAreaChart';
 import {
   Eye, EyeOff, Info, TrendingUp, TrendingDown,
   AlertTriangle, BarChart2, Wallet, ArrowUpRight, ArrowDownRight,
@@ -71,7 +69,6 @@ export default function Dashboard() {
   const { settings } = useAppContext();
   const defaultCurrency = settings?.defaultCurrency || 'EUR';
   const [hideBalance, setHideBalance] = useState(false);
-  const [showInfo, setShowInfo] = useState(false);
 
   const transactions = useLiveQuery(() => db.transactions.toArray()) || [];
   const budgets = useLiveQuery(() => db.budgets.toArray()) || [];
@@ -103,7 +100,7 @@ export default function Dashboard() {
   const depenseTrend = prevDepense > 0 ? ((thisDepense - prevDepense) / prevDepense) * 100 : undefined;
 
   /* 6-month chart */
-  const chartData = Array.from({ length: 6 }, (_, i) => {
+  const chartData: ChartDataPoint[] = Array.from({ length: 6 }, (_, i) => {
     const d = subMonths(now, 5 - i);
     const start = startOfMonth(d);
     const end = endOfMonth(d);
@@ -115,8 +112,8 @@ export default function Dashboard() {
     const depenses = filtered.filter(t => t.type === 'depense').reduce((s, t) => s + t.montantConverti, 0);
     return {
       name: format(d, 'MMM', { locale: fr }),
-      Revenus: parseFloat(revenus.toFixed(2)),
-      Dépenses: parseFloat(depenses.toFixed(2)),
+      value1: parseFloat(revenus.toFixed(2)),
+      value2: parseFloat(depenses.toFixed(2)),
     };
   });
 
@@ -156,16 +153,22 @@ export default function Dashboard() {
                 Bonjour {settings?.username || 'vous'} 👋
               </p>
             </div>
-            <button
-              onClick={() => setHideBalance(h => !h)}
-              className="w-9 h-9 rounded-full bg-white/8 hover:bg-white/15 flex items-center justify-center transition-all border border-white/10"
-              data-testid="btn-toggle-balance"
-            >
-              {hideBalance
-                ? <EyeOff className="h-4 w-4 text-muted-foreground" />
-                : <Eye className="h-4 w-4 text-muted-foreground" />
-              }
-            </button>
+            <div className="flex gap-1.5 items-center">
+              <button
+                onClick={() => setHideBalance(h => !h)}
+                className="w-9 h-9 rounded-xl bg-white/8 hover:bg-white/15 flex items-center justify-center transition-all border border-white/10"
+                data-testid="btn-toggle-balance"
+              >
+                {hideBalance
+                  ? <EyeOff className="h-4 w-4 text-muted-foreground" />
+                  : <Eye className="h-4 w-4 text-muted-foreground" />
+                }
+              </button>
+              <InfoModal
+                title="Tableau de bord"
+                description="Vue d'ensemble de vos finances: solde total, revenus et dépenses du mois, évolution sur 6 mois et vos top catégories de dépenses."
+              />
+            </div>
           </div>
 
           {/* Balance amount */}
@@ -257,45 +260,15 @@ export default function Dashboard() {
             </div>
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height={170}>
-            <AreaChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: -16 }}>
-              <defs>
-                <linearGradient id="gradRevenu" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#34d399" stopOpacity={0.35} />
-                  <stop offset="95%" stopColor="#34d399" stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="gradDepense" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#f87171" stopOpacity={0.35} />
-                  <stop offset="95%" stopColor="#f87171" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <XAxis
-                dataKey="name"
-                tick={{ fontSize: 10, fill: 'hsl(230 18% 52%)' }}
-                tickLine={false}
-                axisLine={false}
-              />
-              <YAxis
-                tick={{ fontSize: 9, fill: 'hsl(230 18% 52%)' }}
-                tickLine={false}
-                axisLine={false}
-                tickFormatter={v => v >= 1000 ? `${(v/1000).toFixed(0)}k` : String(v)}
-              />
-              <Tooltip content={<ChartTooltip currency={defaultCurrency} />} />
-              <Area
-                type="monotone" dataKey="Revenus"
-                stroke="#34d399" strokeWidth={2.5}
-                fill="url(#gradRevenu)" dot={false}
-                activeDot={{ r: 4, fill: '#34d399', strokeWidth: 0 }}
-              />
-              <Area
-                type="monotone" dataKey="Dépenses"
-                stroke="#f87171" strokeWidth={2.5}
-                fill="url(#gradDepense)" dot={false}
-                activeDot={{ r: 4, fill: '#f87171', strokeWidth: 0 }}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
+          <MiniAreaChart
+            data={chartData}
+            currency={defaultCurrency}
+            height={170}
+            label1="Revenus"
+            label2="Dépenses"
+            color1="#34d399"
+            color2="#f87171"
+          />
         )}
       </div>
 
@@ -372,12 +345,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      <InfoModal
-        open={showInfo}
-        onClose={() => setShowInfo(false)}
-        title="Tableau de bord"
-        description="Vue d'ensemble de vos finances: solde total, revenus et dépenses du mois, évolution sur 6 mois et vos top catégories de dépenses."
-      />
+      {/* Tooltip is next to balance toggle */}
     </div>
   );
 }

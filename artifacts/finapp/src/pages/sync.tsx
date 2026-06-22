@@ -1,477 +1,538 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { db } from '../services/db';
-import { firebaseDb, ref, set, get, onValue, generateSessionId, sanitizeForFirebase } from '../services/firebase';
+import { useLiveQuery } from 'dexie-react-hooks';
 import {
-  supabase,
-  supabasePushSession, supabasePullSession, SUPABASE_AVAILABLE,
-  supabaseCheckReady, SupabaseSetupError,
-} from '../services/supabase';
+  generateGroupId, getDeviceId, pushGroup, pullGroup,
+  subscribeToGroup, mergeRemotePayload, removeConflictedTransactions,
+  autoPushIfOnline, ConflictItem, MergeResult,
+} from '../services/sync';
+import { SUPABASE_AVAILABLE } from '../services/supabase';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Info, Monitor, Smartphone, Camera, CheckCircle2, Wifi, Database, AlertTriangle, Copy, Check } from 'lucide-react';
+import {
+  Info, Wifi, WifiOff, RefreshCw, CheckCircle2, AlertTriangle,
+  Copy, Check, Smartphone, Monitor, Link2, Link2Off, Loader2,
+  QrCode, KeyRound, Trash2,
+} from 'lucide-react';
 import InfoModal from '../components/InfoModal';
-import { QRCodeSVG } from 'qrcode.react';
+import { useToast } from '@/hooks/use-toast';
 
-type Mode = 'select' | 'host' | 'client';
-type Backend = 'supabase' | 'firebase' | 'checking';
-
-const SETUP_SQL = `create table if not exists public.sync_sessions (
-  session_id  text        primary key,
-  payload     jsonb       not null default '{}'::jsonb,
-  created_at  timestamptz not null default now()
+// Lazy-load heavy QR libs only when needed
+const LazyQRCode = React.lazy(() =>
+  import('qrcode.react').then(m => ({ default: m.QRCodeSVG }))
 );
-alter table public.sync_sessions enable row level security;
-create policy "allow all on sync_sessions"
-  on public.sync_sessions for all using (true) with check (true);`;
 
-function useLog() {
-  const [logs, setLogs] = useState<string[]>([]);
-  const add = (msg: string) => setLogs(p => [...p, `[${new Date().toLocaleTimeString()}] ${msg}`]);
-  const clear = () => setLogs([]);
-  return { logs, add, clear };
-}
+type SyncStatus = 'idle' | 'syncing' | 'synced' | 'error' | 'conflict';
+type View = 'main' | 'join' | 'qr';
+
+const SETUP_SQL = `-- Run once in Supabase SQL Editor
+create table if not exists public.finapp_sync_groups (
+  group_id   text        primary key,
+  payload    jsonb       not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+alter table public.finapp_sync_groups enable row level security;
+create policy "allow_all_sync_groups"
+  on public.finapp_sync_groups for all using (true) with check (true);
+alter publication supabase_realtime add table public.finapp_sync_groups;`;
 
 export default function Sync() {
-  const [mode, setMode] = useState<Mode>('select');
-  const [backend, setBackend] = useState<Backend>('checking');
-  const [sessionId, setSessionId] = useState('');
+  const settings = useLiveQuery(() => db.settings.get('user'));
+  const groupId = settings?.syncGroupId;
+  const { toast } = useToast();
+
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [view, setView] = useState<View>('main');
+  const [status, setStatus] = useState<SyncStatus>('idle');
+  const [lastSync, setLastSync] = useState<Date | null>(null);
   const [inputCode, setInputCode] = useState('');
-  const [syncing, setSyncing] = useState(false);
-  const [done, setDone] = useState(false);
+  const [statusMsg, setStatusMsg] = useState('');
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [copiedSQL, setCopiedSQL] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
-  const [showSetup, setShowSetup] = useState(false);
-  const [cameraError, setCameraError] = useState('');
-  const [copied, setCopied] = useState(false);
-  const { logs, add, clear } = useLog();
-  const scannerRef = useRef<HTMLDivElement>(null);
-  const qrScannerRef = useRef<unknown>(null);
-  const logsEndRef = useRef<HTMLDivElement>(null);
-  const supabaseChannelRef = useRef<any>(null);
-  const firebaseUnsubscribeRef = useRef<(() => void) | null>(null);
+  const [showSetupSQL, setShowSetupSQL] = useState(false);
+  const [conflicts, setConflicts] = useState<ConflictItem[]>([]);
+  const [mergeResult, setMergeResult] = useState<MergeResult | null>(null);
+  const [keepConflicts, setKeepConflicts] = useState<boolean | null>(null);
 
-  // Determine active backend on mount
-  useEffect(() => {
-    if (!SUPABASE_AVAILABLE) { setBackend('firebase'); return; }
-    supabaseCheckReady().then(ok => setBackend(ok ? 'supabase' : 'firebase'));
-  }, []);
+  // Active real-time subscription ref
+  const unsubRef = useRef<(() => void) | null>(null);
 
+  // ── Online/offline detection ──────────────────────────────────────────────
   useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [logs]);
-
-  useEffect(() => {
+    const onOnline = () => { setIsOnline(true); setStatusMsg(''); };
+    const onOffline = () => { setIsOnline(false); setStatusMsg('Hors ligne — sync suspendue'); };
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
     return () => {
-      stopScanner();
-      if (supabaseChannelRef.current) {
-        try { supabaseChannelRef.current.unsubscribe(); } catch { /* ignore */ }
-        supabaseChannelRef.current = null;
-      }
-      if (firebaseUnsubscribeRef.current) {
-        try { firebaseUnsubscribeRef.current(); } catch { /* ignore */ }
-        firebaseUnsubscribeRef.current = null;
-      }
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
     };
   }, []);
 
-  const stopScanner = () => {
-    if (qrScannerRef.current) {
-      try { (qrScannerRef.current as { clear: () => void }).clear(); } catch { /* ignore */ }
-      qrScannerRef.current = null;
+  // ── Auto-push when coming back online ────────────────────────────────────
+  useEffect(() => {
+    if (isOnline && groupId) {
+      handleSync(true);
     }
-  };
+  }, [isOnline, groupId]); // eslint-disable-line
 
-  const startHost = async () => {
-    setMode('host');
-    clear();
-    setDone(false);
-    const id = generateSessionId();
-    setSessionId(id);
-    add('Session créée : ' + id);
-    setSyncing(true);
-    try {
-      add('Chargement des données locales…');
-      const [transactions, categories, budgets, projects] = await Promise.all([
-        db.transactions.toArray(),
-        db.categories.toArray(),
-        db.budgets.toArray(),
-        db.projects.toArray(),
-      ]);
-      add(`${transactions.length} transactions, ${categories.length} catégories chargées`);
+  // ── Real-time subscription ────────────────────────────────────────────────
+  useEffect(() => {
+    if (!groupId || !isOnline) return;
 
-      const payload = { transactions, categories, budgets, projects, timestamp: Date.now() };
+    // Cleanup old subscription
+    if (unsubRef.current) { unsubRef.current(); unsubRef.current = null; }
 
-      if (backend === 'supabase') {
-        add('Envoi via Supabase…');
-        await supabasePushSession(id, payload);
-        add('✓ Synchronisé via Supabase !');
-      } else {
-        add('Envoi via Firebase…');
-        await set(ref(firebaseDb, `sessions/${id}`), sanitizeForFirebase(payload));
-        add('✓ Synchronisé via Firebase !');
-      }
-      setDone(true);
-    } catch (e) {
-      if (e instanceof SupabaseSetupError) {
-        add('⚠ Table Supabase manquante — tentative via Firebase…');
-        setBackend('firebase');
-      } else {
-        add('Erreur : ' + String(e));
-      }
-    } finally {
-      setSyncing(false);
-    }
-  };
-
-  const startClient = () => {
-    setMode('client');
-    clear();
-    setDone(false);
-    add('Mode client activé. Entrez le code de session.');
-  };
-
-  const startQRScan = async () => {
-    setCameraError('');
-    add("Demande d'accès à la caméra…");
-    try {
-      await navigator.mediaDevices.getUserMedia({ video: true });
-      add('Caméra autorisée. Pointez vers le QR Code.');
-      if (!scannerRef.current) return;
-      const { Html5QrcodeScanner } = await import('html5-qrcode');
-      stopScanner();
-      const scanner = new Html5QrcodeScanner('qr-reader', { fps: 10, qrbox: 250 }, false);
-      qrScannerRef.current = scanner;
-      scanner.render(
-        (text: string) => { setInputCode(text); add('QR Code scanné : ' + text); stopScanner(); },
-        () => {}
-      );
-    } catch {
-      setCameraError('Accès à la caméra refusé. Veuillez entrer le code manuellement.');
-      add('Erreur : accès caméra refusé');
-    }
-  };
-
-  const joinSession = async () => {
-    if (!inputCode.trim()) return;
-    setSyncing(true);
-    add('Connexion à la session : ' + inputCode);
-    try {
-      let data: { transactions?: object[]; categories?: object[]; budgets?: object[]; projects?: object[] } | null = null;
-
-      if (backend === 'supabase') {
-        add('Récupération initiale via Supabase…');
-        data = await supabasePullSession(inputCode);
-        
-        if (data) {
-          add('✓ Session trouvée ! Activation du Temps Réel...');
-          
-          // 🚀 Activation de l'écoute en temps réel avec Supabase
-          if (supabase) {
-            if (supabaseChannelRef.current) {
-              try { supabaseChannelRef.current.unsubscribe(); } catch { /* ignore */ }
-            }
-            const channel = supabase.channel(`sync-${inputCode}`);
-            supabaseChannelRef.current = channel;
-            channel
-              .on(
-                'postgres_changes',
-                {
-                  event: 'UPDATE',
-                  schema: 'public',
-                  table: 'sync_sessions',
-                  filter: `session_id=eq.${inputCode}`
-                },
-                async (payload) => {
-                  add('⚡ Synchronisation en direct : Nouvelles données reçues !');
-                  const newData = payload.new?.payload;
-                  if (!newData) return;
-
-                  const localTx = await db.transactions.toArray();
-                  const remoteTx = (newData.transactions || []) as typeof localTx;
-                  let txAdded = 0;
-                  for (const rt of remoteTx) {
-                    const dup = localTx.some(lt => lt.date === rt.date && lt.montant === rt.montant && lt.categorie === rt.categorie);
-                    if (!dup) {
-                      const { id, ...rest } = rt;
-                      await db.transactions.add(rest);
-                      txAdded++;
-                    }
-                  }
-                  if (txAdded > 0) add(`  → ${txAdded} transactions ajoutées`);
-
-                  const localCat = await db.categories.toArray();
-                  const remoteCat = (newData.categories || []) as typeof localCat;
-                  let catAdded = 0;
-                  for (const rc of remoteCat) {
-                    const exists = localCat.some(lc => lc.nom === rc.nom);
-                    if (!exists) {
-                      const { id, ...rest } = rc;
-                      await db.categories.add(rest);
-                      catAdded++;
-                    }
-                  }
-                  if (catAdded > 0) add(`  → ${catAdded} catégories ajoutées`);
-                }
-              )
-              .subscribe((status) => {
-                if (status === 'SUBSCRIBED') {
-                  add('🔌 Connexion en direct établie avec succès !');
-                }
-              });
-          }
-
-          // Appliquer les données initiales récupérées
-          const localTx = await db.transactions.toArray();
-          const remoteTx = (data.transactions || []) as typeof localTx;
-          let added = 0;
-          const merged = [...localTx];
-          for (const rt of remoteTx) {
-            const dup = localTx.some(lt => lt.date === rt.date && lt.montant === rt.montant && lt.categorie === rt.categorie);
-            if (!dup) { merged.push(rt); added++; }
-          }
-          await db.transactions.clear();
-          for (const t of merged) {
-            const { id, ...rest } = t;
-            await db.transactions.add(rest);
-          }
-          add(`${added} nouvelles transactions ajoutées.`);
-          add('✓ Synchronisation initialisée !');
-          setDone(true);
+    const unsub = subscribeToGroup(groupId, async (remotePayload) => {
+      setStatus('syncing');
+      setStatusMsg('Données reçues en temps réel...');
+      try {
+        const result = await mergeRemotePayload(remotePayload);
+        setLastSync(new Date());
+        if (result.conflicts.length > 0) {
+          setConflicts(result.conflicts);
+          setMergeResult(result);
+          setStatus('conflict');
+          setStatusMsg(`⚠️ Conflit — solde négatif détecté (${result.conflicts.length} transaction(s))`);
         } else {
-          add('Session introuvable sur Supabase.');
-          setSyncing(false);
+          setStatus('synced');
+          const msg = result.addedCount > 0
+            ? `${result.addedCount} nouvelle(s) transaction(s) reçue(s) ✓`
+            : 'Données à jour ✓';
+          setStatusMsg(msg);
+          if (result.addedCount > 0) {
+            toast({ title: '⚡ Sync temps réel', description: `${result.addedCount} transaction(s) synchronisée(s)` });
+          }
+        }
+      } catch (e) {
+        setStatus('error');
+        setStatusMsg('Erreur lors de la synchronisation: ' + String(e));
+      }
+    });
+
+    unsubRef.current = unsub;
+    return () => { if (unsubRef.current) { unsubRef.current(); unsubRef.current = null; } };
+  }, [groupId, isOnline]); // eslint-disable-line
+
+  // ── Sync (push + pull) ────────────────────────────────────────────────────
+  const handleSync = useCallback(async (silent = false) => {
+    if (!groupId || !isOnline) return;
+    setStatus('syncing');
+    if (!silent) setStatusMsg('Synchronisation en cours...');
+    try {
+      // Push local data
+      await pushGroup(groupId);
+      // Pull remote and merge
+      const remote = await pullGroup(groupId);
+      if (remote) {
+        const result = await mergeRemotePayload(remote);
+        setLastSync(new Date());
+        if (result.conflicts.length > 0) {
+          setConflicts(result.conflicts);
+          setMergeResult(result);
+          setStatus('conflict');
+          setStatusMsg(`⚠️ Conflit détecté — solde négatif`);
+        } else {
+          setStatus('synced');
+          const msg = result.addedCount > 0
+            ? `${result.addedCount} transaction(s) synchronisée(s) ✓`
+            : 'Déjà à jour ✓';
+          setStatusMsg(msg);
         }
       } else {
-        add('Récupération via Firebase…');
-        const snap = await get(ref(firebaseDb, `sessions/${inputCode}`));
-        if (!snap.exists()) { add('Session introuvable.'); setSyncing(false); return; }
-        data = snap.val();
-
-        if (!data) { add('Session introuvable ou expirée.'); setSyncing(false); return; }
-
-        add('Données reçues. Fusion en cours…');
-        const localTx = await db.transactions.toArray();
-        const remoteTx = (data.transactions || []) as typeof localTx;
-        let added = 0;
-        const merged = [...localTx];
-        for (const rt of remoteTx) {
-          const dup = localTx.some(lt => lt.date === rt.date && lt.montant === rt.montant && lt.categorie === rt.categorie);
-          if (!dup) { merged.push(rt); added++; }
-        }
-        await db.transactions.clear();
-        for (const t of merged) {
-          const { id, ...rest } = t;
-          await db.transactions.add(rest);
-        }
-        add(`${added} nouvelles transactions ajoutées.`);
-
-        if (firebaseUnsubscribeRef.current) {
-          try { firebaseUnsubscribeRef.current(); } catch { /* ignore */ }
-          firebaseUnsubscribeRef.current = null;
-        }
-
-        let isInitialFire = true;
-        firebaseUnsubscribeRef.current = onValue(ref(firebaseDb, `sessions/${inputCode}`), async (snapshot) => {
-          if (isInitialFire) {
-            isInitialFire = false;
-            return;
-          }
-          const newData = snapshot.val();
-          if (!newData) return;
-
-          add('⚡ Synchronisation en direct : Nouvelles données reçues !');
-          const liveLocalTx = await db.transactions.toArray();
-          const liveRemoteTx = (newData.transactions || []) as typeof liveLocalTx;
-          let liveAdded = 0;
-          for (const rt of liveRemoteTx) {
-            const dup = liveLocalTx.some(lt => lt.date === rt.date && lt.montant === rt.montant && lt.categorie === rt.categorie);
-            if (!dup) {
-              const { id, ...rest } = rt;
-              await db.transactions.add(rest);
-              liveAdded++;
-            }
-          }
-          if (liveAdded > 0) add(`  → ${liveAdded} transactions ajoutées`);
-        });
-
-        add('✓ Synchronisé via Firebase !');
-        setDone(true);
+        setStatus('synced');
+        setStatusMsg('Données envoyées ✓');
+        setLastSync(new Date());
       }
     } catch (e) {
-      if (e instanceof SupabaseSetupError) {
-        add('⚠ Table Supabase manquante — relancez avec Firebase.');
-        setBackend('firebase');
-      } else {
-        add('Erreur : ' + String(e));
+      setStatus('error');
+      setStatusMsg('Erreur: ' + String(e));
+      if (!silent) toast({ title: 'Erreur de sync', description: String(e), variant: 'destructive' });
+    }
+  }, [groupId, isOnline, toast]);
+
+  // ── Create a new group ────────────────────────────────────────────────────
+  const handleCreateGroup = async () => {
+    const newGroupId = generateGroupId();
+    await db.settings.update('user', { syncGroupId: newGroupId });
+    setStatus('idle');
+    setStatusMsg('Groupe créé ! Partagez le code avec vos autres appareils.');
+    toast({ title: '✅ Groupe créé', description: newGroupId });
+  };
+
+  // ── Join existing group ───────────────────────────────────────────────────
+  const handleJoinGroup = async () => {
+    const code = inputCode.trim().toUpperCase();
+    if (!code) return;
+    setStatus('syncing');
+    setStatusMsg('Connexion au groupe...');
+    try {
+      const remote = await pullGroup(code);
+      if (!remote) {
+        setStatus('error');
+        setStatusMsg('Groupe introuvable. Vérifiez le code.');
+        return;
       }
-    } finally {
-      setSyncing(false);
+      await db.settings.update('user', { syncGroupId: code });
+      const result = await mergeRemotePayload(remote);
+      setLastSync(new Date());
+      setView('main');
+      setInputCode('');
+      if (result.conflicts.length > 0) {
+        setConflicts(result.conflicts);
+        setMergeResult(result);
+        setStatus('conflict');
+        setStatusMsg('⚠️ Conflit détecté après jonction');
+      } else {
+        setStatus('synced');
+        setStatusMsg(`Groupe rejoint ! ${result.addedCount} transaction(s) importée(s) ✓`);
+        toast({ title: '✅ Groupe rejoint', description: `${result.addedCount} transaction(s) importée(s)` });
+      }
+    } catch (e) {
+      setStatus('error');
+      setStatusMsg('Erreur: ' + String(e));
     }
   };
 
-  const copySetupSQL = async () => {
-    await navigator.clipboard.writeText(SETUP_SQL);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  // ── Leave group ────────────────────────────────────────────────────────────
+  const handleLeaveGroup = async () => {
+    if (unsubRef.current) { unsubRef.current(); unsubRef.current = null; }
+    await db.settings.update('user', { syncGroupId: '' });
+    setStatus('idle');
+    setStatusMsg('');
+    setConflicts([]);
   };
 
-  const backendLabel = backend === 'checking' ? '…' : backend === 'supabase' ? 'Supabase' : 'Firebase';
-  const backendColor = backend === 'supabase' ? 'text-emerald-400' : backend === 'firebase' ? 'text-orange-400' : 'text-muted-foreground';
+  // ── Resolve conflicts ─────────────────────────────────────────────────────
+  const handleResolveKeep = async () => {
+    // Keep all — accept the negative balance (user decides)
+    setConflicts([]);
+    setStatus('synced');
+    setStatusMsg('Transactions conservées. Vérifiez votre solde.');
+    setKeepConflicts(null);
+  };
+
+  const handleResolveRemove = async () => {
+    // Remove conflicting remote transactions to restore positive balance
+    const uuids = conflicts.map(c => c.uuid);
+    await removeConflictedTransactions(uuids);
+    setConflicts([]);
+    setStatus('synced');
+    setStatusMsg('Transactions conflictuelles supprimées. Solde restauré.');
+    setKeepConflicts(null);
+    toast({ title: '✅ Conflit résolu', description: 'Les transactions problématiques ont été supprimées.' });
+  };
+
+  // ── Copy helpers ──────────────────────────────────────────────────────────
+  const copyCode = async () => {
+    if (!groupId) return;
+    await navigator.clipboard.writeText(groupId);
+    setCopiedCode(true);
+    setTimeout(() => setCopiedCode(false), 2000);
+  };
+
+  const copySQL = async () => {
+    await navigator.clipboard.writeText(SETUP_SQL);
+    setCopiedSQL(true);
+    setTimeout(() => setCopiedSQL(false), 2000);
+  };
+
+  // ── Status indicator ──────────────────────────────────────────────────────
+  const statusColor = {
+    idle: 'text-muted-foreground',
+    syncing: 'text-primary',
+    synced: 'text-emerald-400',
+    error: 'text-red-400',
+    conflict: 'text-amber-400',
+  }[status];
+
+  const statusIcon = {
+    idle: null,
+    syncing: <Loader2 className="h-3.5 w-3.5 animate-spin" />,
+    synced: <CheckCircle2 className="h-3.5 w-3.5" />,
+    error: <AlertTriangle className="h-3.5 w-3.5" />,
+    conflict: <AlertTriangle className="h-3.5 w-3.5" />,
+  }[status];
+
+  const backendLabel = SUPABASE_AVAILABLE ? 'Supabase Realtime' : 'Firebase';
+  const backendColor = SUPABASE_AVAILABLE ? 'text-emerald-400' : 'text-orange-400';
+
+  const formatLastSync = (d: Date) => {
+    const diff = Math.round((Date.now() - d.getTime()) / 1000);
+    if (diff < 60) return `il y a ${diff}s`;
+    if (diff < 3600) return `il y a ${Math.round(diff / 60)}min`;
+    return `il y a ${Math.round(diff / 3600)}h`;
+  };
 
   return (
-    <div className="p-4 md:p-6 animate-fadeUp space-y-4 max-w-2xl mx-auto">
+    <div className="p-4 md:p-6 animate-fadeUp space-y-5 max-w-xl mx-auto">
+      {/* ── Header ── */}
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Synchronisation</h1>
           <p className={`text-xs mt-0.5 flex items-center gap-1.5 ${backendColor}`}>
-            <Database className="h-3 w-3" />
-            Moteur actif : <strong>{backendLabel}</strong>
+            <span className={`w-1.5 h-1.5 rounded-full ${SUPABASE_AVAILABLE ? 'bg-emerald-400' : 'bg-orange-400'} ${isOnline ? 'animate-pulse' : 'opacity-40'}`} />
+            {backendLabel}
           </p>
         </div>
-        <div className="flex gap-1">
-          {SUPABASE_AVAILABLE && backend === 'firebase' && (
-            <Button variant="ghost" size="sm" onClick={() => setShowSetup(s => !s)} className="text-amber-400 hover:text-amber-300 text-xs">
-              <AlertTriangle className="h-3.5 w-3.5 mr-1" /> Config Supabase
-            </Button>
-          )}
-          <Button variant="ghost" size="icon" onClick={() => setShowInfo(true)} data-testid="btn-info">
+        <div className="flex items-center gap-2">
+          {isOnline
+            ? <Wifi className="h-4 w-4 text-emerald-400" />
+            : <WifiOff className="h-4 w-4 text-muted-foreground" />}
+          <Button variant="ghost" size="icon" onClick={() => setShowInfo(true)}>
             <Info className="h-4 w-4" />
           </Button>
         </div>
       </header>
 
-      {/* Supabase setup panel */}
-      {showSetup && (
-        <div className="glass rounded-2xl p-4 space-y-3 border border-amber-500/20 animate-fadeUp">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
-            <div className="text-sm">
-              <p className="font-semibold text-amber-300">Table Supabase non configurée</p>
-              <p className="text-muted-foreground text-xs mt-1">Copiez ce SQL et exécutez-le dans le
-                {' '}<a href="https://supabase.com/dashboard/project/pjrwkppngrpkaedfuunh/sql/new"
-                  target="_blank" rel="noopener noreferrer"
-                  className="text-primary underline underline-offset-2">SQL Editor Supabase</a>.
+      {/* ── Online/offline banner ── */}
+      {!isOnline && (
+        <div className="flex items-center gap-2.5 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 text-sm">
+          <WifiOff className="h-4 w-4 shrink-0" />
+          <div>
+            <p className="font-medium">Vous êtes hors ligne</p>
+            <p className="text-xs opacity-80 mt-0.5">Vos données sont sauvegardées localement. La sync reprendra automatiquement dès que vous êtes connecté.</p>
+          </div>
+        </div>
+      )}
+
+      {/* ── Conflict resolution panel ── */}
+      {conflicts.length > 0 && (
+        <div className="p-4 rounded-2xl border border-amber-500/30 bg-amber-500/8 space-y-3 animate-fadeUp">
+          <div className="flex items-center gap-2 text-amber-400 font-semibold text-sm">
+            <AlertTriangle className="h-4 w-4" />
+            Conflit détecté — solde négatif
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Après synchronisation, votre solde serait négatif à cause de ces transactions reçues d'un autre appareil :
+          </p>
+          <div className="space-y-1.5">
+            {conflicts.map(c => (
+              <div key={c.uuid} className="flex items-center justify-between text-xs bg-card/50 rounded-lg px-3 py-2">
+                <span className="text-foreground">{c.category}</span>
+                <span className="text-muted-foreground">{c.date}</span>
+                <span className="text-red-400 font-semibold">−{c.amount.toFixed(2)}</span>
+              </div>
+            ))}
+          </div>
+          {mergeResult && (
+            <p className="text-xs text-amber-400/80">
+              Solde résultant : <strong>{mergeResult.newBalance.toFixed(2)}</strong> {settings?.defaultCurrency || 'EUR'}
+            </p>
+          )}
+          <div className="flex gap-2 pt-1">
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 text-xs border-red-500/40 text-red-400 hover:bg-red-500/10"
+              onClick={handleResolveRemove}
+            >
+              <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+              Supprimer les conflits
+            </Button>
+            <Button
+              size="sm"
+              className="flex-1 text-xs"
+              onClick={handleResolveKeep}
+            >
+              <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />
+              Garder tout
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── NO GROUP: setup ── */}
+      {!groupId && view === 'main' && (
+        <div className="space-y-4">
+          <div className="glass rounded-2xl p-5 text-center space-y-4">
+            <div className="w-14 h-14 bg-primary/10 rounded-2xl flex items-center justify-center mx-auto">
+              <Link2Off className="h-7 w-7 text-primary/60" />
+            </div>
+            <div>
+              <p className="font-semibold">Aucun groupe de sync</p>
+              <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
+                Créez un groupe sur cet appareil, puis scannez le QR ou entrez le code sur vos autres appareils. Un seul scan suffit — la sync est ensuite automatique et permanente.
               </p>
             </div>
-          </div>
-          <div className="relative">
-            <pre className="text-xs text-emerald-300 bg-zinc-950/80 rounded-xl p-3 overflow-x-auto leading-relaxed">
-              {SETUP_SQL}
-            </pre>
-            <button
-              onClick={copySetupSQL}
-              className="absolute top-2 right-2 p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition-colors"
-            >
-              {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5 text-muted-foreground" />}
-            </button>
-          </div>
-          <p className="text-xs text-muted-foreground">Après exécution, rechargez la page pour activer Supabase.</p>
-        </div>
-      )}
-
-      {mode === 'select' && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-2">
-          <button
-            onClick={startHost}
-            className="glass p-6 rounded-2xl border-2 border-primary/30 hover:border-primary/60 hover:bg-primary/5 text-left space-y-3 transition-all active:scale-95 group"
-            data-testid="btn-mode-host"
-          >
-            <div className="w-12 h-12 rounded-xl bg-primary/15 flex items-center justify-center group-hover:bg-primary/25 transition-all">
-              <Monitor className="h-6 w-6 text-primary" />
-            </div>
-            <div>
-              <p className="font-semibold">Appareil source</p>
-              <p className="text-sm text-muted-foreground mt-1">Partager mes données via QR Code</p>
-            </div>
-          </button>
-          <button
-            onClick={startClient}
-            className="glass p-6 rounded-2xl border-2 border-card-border hover:border-muted-foreground/40 text-left space-y-3 transition-all active:scale-95 group"
-            data-testid="btn-mode-client"
-          >
-            <div className="w-12 h-12 rounded-xl bg-muted/40 flex items-center justify-center group-hover:bg-muted/70 transition-all">
-              <Smartphone className="h-6 w-6 text-muted-foreground" />
-            </div>
-            <div>
-              <p className="font-semibold">Appareil cible</p>
-              <p className="text-sm text-muted-foreground mt-1">Recevoir les données d'un autre appareil</p>
-            </div>
-          </button>
-        </div>
-      )}
-
-      {mode === 'host' && sessionId && (
-        <div className="space-y-4">
-          <Button variant="ghost" size="sm" onClick={() => { setMode('select'); stopScanner(); }} className="text-muted-foreground">
-            ← Retour
-          </Button>
-          <div className="glass flex flex-col items-center gap-4 p-6 rounded-2xl">
-            <div className="p-4 bg-white rounded-2xl shadow-xl shadow-black/30">
-              <QRCodeSVG value={sessionId} size={180} />
-            </div>
-            <div className="text-center">
-              <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Code de session</p>
-              <p className="font-mono font-bold text-xl tracking-widest text-primary">{sessionId}</p>
-            </div>
-            {syncing && (
-              <div className="flex items-center gap-2 text-muted-foreground text-sm">
-                <Wifi className="h-4 w-4 animate-pulse" /> Envoi en cours…
-              </div>
-            )}
-            {done && (
-              <div className="flex items-center gap-2 text-emerald-400 text-sm font-medium">
-                <CheckCircle2 className="h-4 w-4" /> Données partagées via {backendLabel} !
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {mode === 'client' && (
-        <div className="space-y-4">
-          <Button variant="ghost" size="sm" onClick={() => { setMode('select'); stopScanner(); }} className="text-muted-foreground">
-            ← Retour
-          </Button>
-          <div className="glass space-y-3 p-4 rounded-2xl">
-            <div className="flex gap-2">
-              <Input
-                value={inputCode}
-                onChange={e => setInputCode(e.target.value)}
-                placeholder="finapp-sync-XXXXXXX"
-                className="font-mono"
-                data-testid="input-session-code"
-              />
-              <Button onClick={joinSession} disabled={syncing || !inputCode.trim()} data-testid="btn-join">
-                {syncing ? 'Sync…' : 'Rejoindre'}
+            <div className="flex gap-3">
+              <Button onClick={handleCreateGroup} className="flex-1" data-testid="btn-create-group">
+                <Monitor className="h-4 w-4 mr-2" />
+                Créer un groupe
+              </Button>
+              <Button variant="outline" onClick={() => setView('join')} className="flex-1" data-testid="btn-join-group">
+                <Smartphone className="h-4 w-4 mr-2" />
+                Rejoindre
               </Button>
             </div>
-            <Button variant="outline" size="sm" onClick={startQRScan} className="w-full" data-testid="btn-scan-qr">
-              <Camera className="h-4 w-4 mr-2" /> Scanner le QR Code
-            </Button>
-            {cameraError && (
-              <div className="p-3 rounded-xl bg-destructive/10 border border-destructive/30 text-destructive text-sm">{cameraError}</div>
-            )}
-            <div id="qr-reader" ref={scannerRef} />
-            {done && (
-              <div className="flex items-center gap-2 text-emerald-400 text-sm font-medium">
-                <CheckCircle2 className="h-4 w-4" /> Synchronisation réussie !
+          </div>
+
+          {/* Supabase SQL setup helper */}
+          {SUPABASE_AVAILABLE && (
+            <details className="glass rounded-2xl p-4 text-xs text-muted-foreground">
+              <summary className="cursor-pointer font-medium text-amber-400 flex items-center gap-1.5">
+                <AlertTriangle className="h-3.5 w-3.5" />
+                Configuration Supabase requise
+              </summary>
+              <p className="mt-2 mb-2 leading-relaxed">Exécutez ce SQL une seule fois dans votre <a href="https://supabase.com/dashboard/project/pjrwkppngrpkaedfuunh/sql/new" target="_blank" rel="noopener noreferrer" className="text-primary underline">SQL Editor Supabase</a> :</p>
+              <div className="relative">
+                <pre className="bg-zinc-950/80 rounded-xl p-3 text-emerald-300 overflow-x-auto leading-relaxed">{SETUP_SQL}</pre>
+                <button onClick={copySQL} className="absolute top-2 right-2 p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700">
+                  {copiedSQL ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+                </button>
               </div>
-            )}
+            </details>
+          )}
+        </div>
+      )}
+
+      {/* ── JOIN VIEW: enter code ── */}
+      {view === 'join' && (
+        <div className="space-y-4 animate-fadeUp">
+          <Button variant="ghost" size="sm" onClick={() => setView('main')} className="text-muted-foreground -ml-1">
+            ← Retour
+          </Button>
+          <div className="glass rounded-2xl p-5 space-y-4">
+            <div className="text-center space-y-1">
+              <KeyRound className="h-8 w-8 text-primary mx-auto mb-2" />
+              <p className="font-semibold">Entrez le code du groupe</p>
+              <p className="text-xs text-muted-foreground">Format: FIN-XXXXXX</p>
+            </div>
+            <Input
+              value={inputCode}
+              onChange={e => setInputCode(e.target.value.toUpperCase())}
+              placeholder="FIN-AB3CD7"
+              className="font-mono text-center text-lg tracking-widest"
+              data-testid="input-group-code"
+            />
+            <Button
+              onClick={handleJoinGroup}
+              disabled={!inputCode.trim() || status === 'syncing' || !isOnline}
+              className="w-full"
+              data-testid="btn-confirm-join"
+            >
+              {status === 'syncing' ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Connexion...</> : 'Rejoindre le groupe'}
+            </Button>
+            {!isOnline && <p className="text-xs text-center text-amber-400">Connexion internet requise pour rejoindre un groupe</p>}
           </div>
         </div>
       )}
 
-      {logs.length > 0 && (
-        <div className="rounded-xl bg-zinc-950/80 border border-zinc-800 p-4 font-mono text-xs text-emerald-400 space-y-1 max-h-48 overflow-y-auto">
-          {logs.map((l, i) => <div key={i}>{l}</div>)}
-          <div ref={logsEndRef} />
+      {/* ── ACTIVE GROUP ── */}
+      {groupId && view === 'main' && (
+        <div className="space-y-4">
+          {/* Group card */}
+          <div className="glass rounded-2xl p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-muted-foreground'}`} />
+                <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  {isOnline ? 'Sync active' : 'En attente de connexion'}
+                </p>
+              </div>
+              <Link2 className="h-4 w-4 text-primary" />
+            </div>
+
+            {/* Group ID display */}
+            <div className="text-center py-3">
+              <p className="text-xs text-muted-foreground mb-1">Code du groupe</p>
+              <p className="font-mono font-bold text-2xl tracking-widest text-primary">{groupId}</p>
+            </div>
+
+            {/* Action buttons */}
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={copyCode}
+                className="text-xs"
+                data-testid="btn-copy-code"
+              >
+                {copiedCode ? <Check className="h-3.5 w-3.5 mr-1.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5 mr-1.5" />}
+                {copiedCode ? 'Copié !' : 'Copier le code'}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setView('qr')}
+                className="text-xs"
+                data-testid="btn-show-qr"
+              >
+                <QrCode className="h-3.5 w-3.5 mr-1.5" />
+                QR Code
+              </Button>
+            </div>
+          </div>
+
+          {/* Status message */}
+          {statusMsg && (
+            <div className={`flex items-center gap-2 text-xs px-3 py-2 rounded-xl bg-card/50 border border-card-border ${statusColor}`}>
+              {statusIcon}
+              <span>{statusMsg}</span>
+              {lastSync && status !== 'syncing' && (
+                <span className="ml-auto text-muted-foreground">{formatLastSync(lastSync)}</span>
+              )}
+            </div>
+          )}
+
+          {/* Sync button */}
+          <Button
+            onClick={() => handleSync(false)}
+            disabled={status === 'syncing' || !isOnline}
+            className="w-full"
+            data-testid="btn-manual-sync"
+          >
+            {status === 'syncing'
+              ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Synchronisation...</>
+              : <><RefreshCw className="h-4 w-4 mr-2" />Synchroniser maintenant</>
+            }
+          </Button>
+
+          {/* Info callout */}
+          <div className="p-3 rounded-xl bg-primary/5 border border-primary/20 text-xs text-muted-foreground leading-relaxed">
+            <span className="text-primary font-medium">⚡ Sync temps réel active.</span> Dès qu'un autre appareil ajoute une transaction, vous la recevez automatiquement — sans rien faire. Le code <span className="font-mono text-foreground">{groupId}</span> ne change jamais.
+          </div>
+
+          {/* Leave group */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleLeaveGroup}
+            className="w-full text-xs text-muted-foreground hover:text-destructive"
+          >
+            Quitter ce groupe de sync
+          </Button>
+        </div>
+      )}
+
+      {/* ── QR VIEW ── */}
+      {groupId && view === 'qr' && (
+        <div className="space-y-4 animate-fadeUp">
+          <Button variant="ghost" size="sm" onClick={() => setView('main')} className="text-muted-foreground -ml-1">
+            ← Retour
+          </Button>
+          <div className="glass rounded-2xl p-6 flex flex-col items-center gap-5">
+            <div>
+              <p className="font-semibold text-center mb-1">Scanner pour rejoindre</p>
+              <p className="text-xs text-muted-foreground text-center">Scannez ce QR avec l'autre appareil — une seule fois suffit</p>
+            </div>
+            <div className="p-4 bg-white rounded-2xl shadow-xl shadow-black/30">
+              <React.Suspense fallback={<div className="w-44 h-44 flex items-center justify-center text-muted-foreground text-xs">Chargement...</div>}>
+                <LazyQRCode value={groupId} size={176} />
+              </React.Suspense>
+            </div>
+            <div className="text-center">
+              <p className="text-xs text-muted-foreground">Ou entrez manuellement le code :</p>
+              <p className="font-mono font-bold text-xl tracking-widest text-primary mt-1">{groupId}</p>
+            </div>
+          </div>
         </div>
       )}
 
       <InfoModal
-        open={showInfo}
-        onClose={() => setShowInfo(false)}
-        title="Synchronisation"
-        description={`Sync entre appareils via ${backendLabel}. L'hôte génère un QR Code, le client le scanne pour recevoir les données. Fonctionne hors-ligne si le cache est actif.`}
+        title="Synchronisation temps réel"
+        description={`Sync permanente entre appareils via ${backendLabel}. Créez un groupe une fois, partagez le code — la sync est ensuite automatique et instantanée. Fonctionne hors ligne : vos données sont toujours sauvegardées localement.`}
       />
     </div>
   );

@@ -42,6 +42,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [settings?.id]); // only fire when settings first loads
 
   useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden' && settings?.pinCode) {
+        setIsLocked(true);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [settings?.pinCode, setIsLocked]);
+
+  useEffect(() => {
     document.documentElement.classList.remove('dark', 'light');
     document.documentElement.classList.add(theme);
   }, [theme]);

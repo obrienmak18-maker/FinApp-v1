@@ -17,7 +17,6 @@ import {
 export default function Projects() {
   const { settings } = useAppContext();
   const defaultCurrency = settings?.defaultCurrency || 'EUR';
-  const [showInfo, setShowInfo] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [showContrib, setShowContrib] = useState<number | null>(null);
   const [deleteId, setDeleteId] = useState<number | null>(null);
@@ -57,9 +56,10 @@ export default function Projects() {
           <Button size="sm" onClick={() => setShowAdd(true)} data-testid="btn-add-project">
             <Plus className="h-4 w-4 mr-1" /> Nouveau
           </Button>
-          <Button variant="ghost" size="icon" onClick={() => setShowInfo(true)} data-testid="btn-info">
-            <Info className="h-4 w-4" />
-          </Button>
+          <InfoModal
+            title="Projets d'épargne"
+            description="Créez des cagnottes avec un objectif et suivez votre progression. Ajoutez des versements pour avancer vers votre but."
+          />
         </div>
       </header>
 
@@ -108,7 +108,7 @@ export default function Projects() {
         </div>
       )}
 
-      <InfoModal open={showInfo} onClose={() => setShowInfo(false)} title="Projets d'épargne" description="Créez des cagnottes avec un objectif et suivez votre progression. Ajoutez des versements pour avancer vers votre but." />
+      {/* Tooltip in header */}
 
       <Dialog open={showAdd} onOpenChange={o => !o && setShowAdd(false)}>
         <DialogContent className="animate-zoomIn bg-card/95 backdrop-blur-xl border-card-border sm:max-w-sm">

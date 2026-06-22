@@ -1,6 +1,6 @@
 import React from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { Home, List, PieChart, Target, MessageSquare, Settings, RefreshCw, TrendingUp } from 'lucide-react';
+import { Home, List, PieChart, Target, MessageSquare, Settings, RefreshCw, TrendingUp, Moon, Sun, Lock } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import FAB from './FAB';
 
@@ -29,7 +29,7 @@ const PAGE_LABELS: Record<string, string> = {
 export default function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { settings } = useAppContext();
+  const { settings, theme, toggleTheme, setIsLocked } = useAppContext();
 
   const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path + '/');
   const pageLabel = PAGE_LABELS[location.pathname] || 'FinApp';
@@ -80,11 +80,30 @@ export default function Layout() {
           })}
         </nav>
 
-        {/* User info at bottom */}
-        <div className="p-4 border-t border-card-border/40 space-y-1">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Connecté en tant que</p>
-          <p className="text-sm font-semibold truncate">{settings?.username || 'Vous'}</p>
-          <p className="text-[11px] text-muted-foreground">Devise : {settings?.defaultCurrency || 'EUR'}</p>
+        {/* User info & quick actions at bottom */}
+        <div className="p-4 border-t border-card-border/40 space-y-3">
+          <div>
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Connecté en tant que</p>
+            <p className="text-sm font-semibold truncate">{settings?.username || 'Vous'}</p>
+            <p className="text-[11px] text-muted-foreground">Devise : {settings?.defaultCurrency || 'EUR'}</p>
+          </div>
+          <div className="flex items-center gap-2 pt-2 border-t border-card-border/40">
+            <button
+              onClick={toggleTheme}
+              className="flex-1 flex items-center justify-center gap-2 p-2 rounded-lg bg-secondary/50 hover:bg-secondary text-xs font-medium transition-colors"
+              title="Changer le thème"
+            >
+              {theme === 'dark' ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
+              {theme === 'dark' ? 'Clair' : 'Sombre'}
+            </button>
+            <button
+              onClick={() => setIsLocked(true)}
+              className="flex items-center justify-center p-2 rounded-lg bg-destructive/10 text-destructive hover:bg-destructive hover:text-destructive-foreground transition-colors"
+              title="Verrouiller"
+            >
+              <Lock className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
       </aside>
 
@@ -97,9 +116,11 @@ export default function Layout() {
             <span className="text-card-border">/</span>
             <span className="text-foreground font-semibold">{pageLabel}</span>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="text-xs text-muted-foreground">Local-first · Données sécurisées</span>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 bg-secondary/30 px-3 py-1.5 rounded-full">
+              <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-xs font-medium">Local-first</span>
+            </div>
           </div>
         </header>
 
@@ -110,27 +131,34 @@ export default function Layout() {
       </div>
 
       {/* ── Mobile Bottom Nav ── */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 h-16 glass-strong border-t border-card-border/60 flex items-center overflow-x-auto px-1 z-30">
-        {mobileNavItems.map(item => {
-          const active = isActive(item.path);
-          return (
-            <button
-              key={item.path}
-              onClick={() => navigate(item.path)}
-              className={`flex flex-col items-center justify-center flex-shrink-0 min-w-[4.5rem] h-full gap-1 px-2 transition-all duration-200 ${
-                active ? 'text-primary' : 'text-muted-foreground'
-              }`}
-              data-testid={`mobile-nav-${item.path.replace('/', '')}`}
-            >
-              <div className={`p-1 rounded-lg transition-all ${active ? 'bg-primary/15' : ''}`}>
-                <item.icon className={`h-5 w-5 transition-all duration-200 ${active ? 'scale-110' : ''}`} />
-              </div>
-              <span className={`text-[8px] font-medium leading-none ${active ? 'opacity-100' : 'opacity-60'}`}>
-                {item.label.split(' ')[0]}
-              </span>
-            </button>
-          );
-        })}
+      <div className="md:hidden fixed bottom-0 left-0 right-0 h-16 glass-strong border-t border-card-border/60 z-30 flex items-center">
+        {/* Left fade overlay */}
+        <div className="absolute left-0 top-0 bottom-0 w-8 bg-gradient-to-r from-background to-transparent pointer-events-none z-40 opacity-70" />
+        {/* Right fade overlay */}
+        <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-background to-transparent pointer-events-none z-40 opacity-70" />
+        
+        <div className="w-full h-full flex items-center overflow-x-auto scrollbar-none snap-x snap-mandatory scroll-smooth px-4 gap-1.5">
+          {mobileNavItems.map(item => {
+            const active = isActive(item.path);
+            return (
+              <button
+                key={item.path}
+                onClick={() => navigate(item.path)}
+                className={`flex flex-col items-center justify-center flex-shrink-0 w-20 h-full gap-1 snap-center transition-all duration-200 ${
+                  active ? 'text-primary' : 'text-muted-foreground'
+                }`}
+                data-testid={`mobile-nav-${item.path.replace('/', '')}`}
+              >
+                <div className={`p-1.5 rounded-xl transition-all ${active ? 'bg-primary/15 scale-110 shadow-lg shadow-primary/5' : 'hover:bg-white/5'}`}>
+                  <item.icon className="h-5 w-5" />
+                </div>
+                <span className={`text-[8px] font-semibold tracking-wide truncate max-w-[4.5rem] ${active ? 'text-foreground opacity-100' : 'text-muted-foreground opacity-75'}`}>
+                  {item.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* FAB (transactions page only) */}

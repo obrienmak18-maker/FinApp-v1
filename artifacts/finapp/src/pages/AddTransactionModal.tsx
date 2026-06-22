@@ -38,8 +38,6 @@ export default function AddTransactionModal({ open, onClose }: AddTransactionMod
   const [showAddCat, setShowAddCat] = useState(false);
   const [scanLoading, setScanLoading] = useState(false);
   const [scanDone, setScanDone] = useState(false);
-  const [prevCatCount, setPrevCatCount] = useState(0);
-
   const allTransactions = useLiveQuery(() => db.transactions.toArray()) || [];
   const balance = allTransactions.reduce((acc, t) =>
     t.type === 'revenu' ? acc + t.montantConverti : acc - t.montantConverti, 0);
@@ -53,20 +51,6 @@ export default function AddTransactionModal({ open, onClose }: AddTransactionMod
     () => categorieId ? db.categories.where('parentId').equals(categorieId).toArray() : Promise.resolve([] as import('../services/db').Category[]),
     [categorieId]
   ) || [];
-
-  // Auto-select newly created category after AddCategoryModal closes
-  useEffect(() => {
-    if (parentCategories.length > prevCatCount && prevCatCount > 0) {
-      const newest = [...parentCategories].sort((a, b) => (b.id ?? 0) - (a.id ?? 0))[0];
-      if (newest) {
-        setCategorie(newest.nom);
-        setCategorieId(newest.id);
-        setSousCategorie('');
-      }
-    }
-    setPrevCatCount(parentCategories.length);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [parentCategories.length]);
 
   useEffect(() => {
     if (montant && devise && defaultCurrency) {
@@ -346,6 +330,23 @@ export default function AddTransactionModal({ open, onClose }: AddTransactionMod
         open={showAddCat}
         onClose={() => setShowAddCat(false)}
         defaultType={type}
+        onCreated={(cat) => {
+          if (cat.parentId) {
+            db.categories.get(cat.parentId).then(parent => {
+              if (parent) {
+                setCategorie(parent.nom);
+                setCategorieId(parent.id);
+                setSousCategorie(cat.nom);
+                setStep(3);
+              }
+            });
+          } else {
+            setCategorie(cat.nom);
+            setCategorieId(cat.id);
+            setSousCategorie('');
+            setStep(2);
+          }
+        }}
       />
     </>
   );

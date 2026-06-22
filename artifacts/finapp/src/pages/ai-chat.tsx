@@ -56,7 +56,6 @@ export default function AIChat() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [muted, setMuted] = useState(false);
-  const [showInfo, setShowInfo] = useState(false);
   const [onlineStatus, setOnlineStatus] = useState(navigator.onLine);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -83,9 +82,26 @@ export default function AIChat() {
   const speak = (text: string) => {
     if (muted || !window.speechSynthesis) return;
     window.speechSynthesis.cancel();
-    const utter = new SpeechSynthesisUtterance(text);
+    
+    // Process text so it reads naturally (avoiding "zéro virgule zéro zéro", markdown tags, etc.)
+    const cleanText = text
+      .replace(/\*\*/g, '')
+      .replace(/\*/g, '')
+      .replace(/#/g, '')
+      .replace(/_/g, '')
+      .replace(/- /g, '')
+      .replace(/\b0[.,]00\b/g, 'zéro')
+      .replace(/(\d+)[.,]00/g, '$1')
+      .replace(/\b0\s*€/g, 'zéro euro')
+      .replace(/\b0\s*\$/g, 'zéro dollar')
+      .replace(/\btx\b/gi, 'transactions')
+      .replace(/\bmin\b/gi, 'minimum')
+      .replace(/\bmax\b/gi, 'maximum')
+      .trim();
+
+    const utter = new SpeechSynthesisUtterance(cleanText);
     utter.lang = 'fr-FR';
-    utter.rate = 0.9;
+    utter.rate = 0.95;
     window.speechSynthesis.speak(utter);
   };
 
@@ -119,9 +135,10 @@ export default function AIChat() {
           <Button variant="ghost" size="icon" onClick={() => setMuted(m => !m)} data-testid="btn-mute">
             {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
           </Button>
-          <Button variant="ghost" size="icon" onClick={() => setShowInfo(true)} data-testid="btn-info">
-            <Info className="h-4 w-4" />
-          </Button>
+          <InfoModal
+            title="Assistant IA"
+            description="Posez des questions sur vos finances en français. L'IA analyse vos données localement ou utilise Gemini si vous êtes en ligne."
+          />
         </div>
       </div>
 
@@ -187,7 +204,7 @@ export default function AIChat() {
         </form>
       </div>
 
-      <InfoModal open={showInfo} onClose={() => setShowInfo(false)} title="Assistant IA" description="Posez des questions sur vos finances en français. L'IA analyse vos données localement ou utilise Gemini si vous êtes en ligne." />
+      {/* Tooltip in header */}
     </div>
   );
 }

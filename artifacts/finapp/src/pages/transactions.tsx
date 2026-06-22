@@ -6,7 +6,6 @@ import { Button } from '@/components/ui/button';
 import { Info, Trash2, Download, Filter } from 'lucide-react';
 import { format, startOfWeek, startOfMonth } from 'date-fns';
 import { fr } from 'date-fns/locale';
-import * as XLSX from 'xlsx';
 import InfoModal from '../components/InfoModal';
 import AddTransactionModal from './AddTransactionModal';
 import {
@@ -24,10 +23,18 @@ export default function Transactions() {
   const [filterType, setFilterType] = useState<FilterType>('tous');
   const [period, setPeriod] = useState<PeriodFilter>('tout');
   const [deleteId, setDeleteId] = useState<number | null>(null);
-  const [showInfo, setShowInfo] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
 
   const allTransactions = useLiveQuery(() => db.transactions.orderBy('date').reverse().toArray()) || [];
+  const categories = useLiveQuery(() => db.categories.toArray()) || [];
+
+  const categoryEmojiMap = React.useMemo(() => {
+    const map: Record<string, string> = {};
+    categories.forEach(c => {
+      map[c.nom.toLowerCase()] = c.emoji;
+    });
+    return map;
+  }, [categories]);
 
   const filtered = allTransactions.filter(t => {
     if (filterType !== 'tous' && t.type !== filterType) return false;
@@ -46,7 +53,8 @@ export default function Transactions() {
     if (deleteId !== null) { await db.transactions.delete(deleteId); setDeleteId(null); }
   };
 
-  const handleExport = () => {
+  const handleExport = async () => {
+    const XLSX = await import('xlsx');
     const data = filtered.map(t => ({
       Date: t.date, Type: t.type, Catégorie: t.categorie,
       'Sous-catégorie': t.sousCategorie, Article: t.item,
@@ -67,9 +75,10 @@ export default function Transactions() {
           <Button variant="outline" size="sm" onClick={handleExport} data-testid="btn-export">
             <Download className="h-4 w-4 mr-1" /> Exporter
           </Button>
-          <Button variant="ghost" size="icon" onClick={() => setShowInfo(true)} data-testid="btn-info">
-            <Info className="h-4 w-4" />
-          </Button>
+          <InfoModal
+            title="Transactions"
+            description="Consultez toutes vos transactions, filtrez par type ou période, et exportez en Excel. Utilisez le bouton + pour ajouter une nouvelle transaction."
+          />
         </div>
       </header>
 
@@ -113,8 +122,8 @@ export default function Transactions() {
               className="flex items-center gap-3 p-4 rounded-xl bg-card/50 backdrop-blur-sm border border-card-border hover:bg-card/70 transition-all"
               data-testid={`transaction-${t.id}`}
             >
-              <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center text-lg shrink-0">
-                {t.categorie.charAt(0)}
+              <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center text-lg shrink-0" title={t.categorie}>
+                {categoryEmojiMap[t.categorie.toLowerCase()] || t.categorie.charAt(0)}
               </div>
               <div className="flex-1 min-w-0">
                 <p className="font-medium text-sm truncate">
@@ -144,12 +153,7 @@ export default function Transactions() {
       {/* FAB area padding */}
       <div className="h-20" />
 
-      <InfoModal
-        open={showInfo}
-        onClose={() => setShowInfo(false)}
-        title="Transactions"
-        description="Consultez toutes vos transactions, filtrez par type ou période, et exportez en Excel. Utilisez le bouton + pour ajouter une nouvelle transaction."
-      />
+      {/* Tooltip in header */}
 
       <AddTransactionModal open={showAdd} onClose={() => setShowAdd(false)} />
 

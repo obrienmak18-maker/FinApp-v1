@@ -122,39 +122,48 @@ function generateLocalResponse(userMessage: string, context: string, currency = 
   const topCatStr = topCatMatch?.[1] || 'aucune';
   const nbTx = nbTxMatch?.[1] || '0';
 
+  const isZero = (str: string) => {
+    const s = str.trim().toLowerCase();
+    return s.startsWith('0') || s.startsWith('zéro') || s.includes('0,00') || s.includes('0.00');
+  };
+
   if (lower.includes('solde') || lower.includes('combien')) {
-    return `Votre solde actuel est de ${soldeStr}. ${Number(nbTx) === 0 ? "Commencez à enregistrer vos transactions pour un suivi plus précis 😊" : "Continuez comme ça 💪"}`;
+    if (isZero(soldeStr)) {
+      return `Votre solde est à zéro pour le moment. Dès que vous enregistrerez un revenu, vos finances commenceront à décoller ! 😊`;
+    }
+    return `Votre solde actuel est de ${soldeStr}. ${Number(nbTx) === 0 ? "Commencez à enregistrer vos transactions pour un suivi plus précis. 😊" : "C'est un très bon suivi, continuez comme ça ! 💪"}`;
   }
 
   if (lower.includes('dépense') || lower.includes('depense') || lower.includes('dépensé')) {
-    if (depStr === '0 €' || depStr.includes('0 ')) {
-      return `Vous n'avez aucune dépense enregistrée ce mois-ci. Soit vous êtes très économe, soit il faut commencer à tout noter ! 😄`;
+    if (isZero(depStr)) {
+      return `Vous n'avez pas encore fait de dépenses ce mois-ci. C'est parfait pour votre épargne ! 😄`;
     }
-    return `Ce mois-ci, vous avez dépensé ${depStr}. Vos principales catégories : ${topCatStr}. Identifiez où couper si nécessaire 💡`;
+    return `Ce mois-ci, vous avez dépensé environ ${depStr}. Vos dépenses les plus importantes concernent : ${topCatStr}. Faisons attention à ne pas dépasser vos limites ! 💡`;
   }
 
   if (lower.includes('revenu') || lower.includes('salaire') || lower.includes('gagné')) {
-    if (revStr === '0 €' || revStr.includes('0 ')) {
-      return `Aucun revenu enregistré ce mois-ci. Pensez à ajouter vos rentrées d'argent pour que je puisse vous aider ! 😊`;
+    if (isZero(revStr)) {
+      return `Vous n'avez pas encore de revenus enregistrés pour ce mois. Pensez à ajouter vos rentrées pour équilibrer vos comptes ! 😊`;
     }
-    return `Vos revenus de ce mois s'élèvent à ${revStr}. Avec ${depStr} de dépenses, vous gardez une bonne marge ✨`;
+    return `Vos revenus de ce mois s'élèvent à ${revStr}. Avec vos dépenses de ${depStr}, vous gardez un bon équilibre. Félicitations ! ✨`;
   }
 
   if (lower.includes('économis') || lower.includes('economis') || lower.includes('épargn')) {
-    return `Pour mieux épargner, voici 3 réflexes simples : notez chaque dépense au moment où elle arrive, fixez-vous un objectif mensuel concret, et mettez de côté automatiquement dès que vous êtes payé. Petit à petit, ça fait une vraie différence 💪`;
+    return `Pour mieux économiser, voici trois réflexes simples : commencez par noter chaque petite dépense du quotidien, fixez-vous un objectif réaliste dans la section Projets, et essayez d'épargner automatiquement en début de mois. Chaque petit pas compte ! 💪`;
   }
 
   if (lower.includes('analys') || lower.includes('bilan') || lower.includes('résumé')) {
-    return `Voici votre bilan du mois 📊 Revenus : ${revStr}, dépenses : ${depStr}. Principales sorties : ${topCatStr}. ${Number(nbTx) > 0 ? `Vous avez enregistré ${nbTx} transactions ce mois.` : 'Commencez à enregistrer vos transactions !'}`;
+    const countText = Number(nbTx) > 0 ? `avec ${nbTx} transactions enregistrées` : "sans aucune transaction pour l'instant";
+    return `Voici votre bilan de la période 📊 Vos revenus totalisent ${revStr} et vos dépenses s'élèvent à ${depStr}, ${countText}. Vos postes principaux sont : ${topCatStr}.`;
   }
 
   if (lower.includes('budget')) {
-    return `Les budgets, c'est votre meilleur allié ! Rendez-vous dans la section Budgets pour définir des plafonds par catégorie. Je vous aiderai à rester dans les clous 🎯`;
+    return `Les budgets vous aident à garder le contrôle ! Allez dans l'onglet Budgets pour vous fixer des limites par catégorie. Je serai là pour vous alerter en cas de dépassement ! 🎯`;
   }
 
   if (lower.includes('projet') || lower.includes('objectif') || lower.includes('épargner')) {
-    return `Vous avez des projets en tête ? Direction la section Projets pour définir un montant cible et suivre votre progression. Chaque petit pas compte ✨`;
+    return `Un projet de voyage, d'achat ou de secours ? Créez-le dans la section Projets. Vous pourrez y allouer de l'épargne et suivre votre jauge de progression ! ✨`;
   }
 
-  return `Bonne question ! En ce moment, votre solde est de ${soldeStr}, avec ${depStr} de dépenses ce mois. Vous pouvez me demander votre bilan, vos dépenses par catégorie, ou des conseils pour économiser 😊`;
+  return `En ce moment, votre solde disponible est de ${soldeStr}, et vous avez dépensé ${depStr} ce mois-ci. Posez-moi des questions sur vos dépenses par catégorie ou demandez-moi des conseils d'épargne ! 😊`;
 }

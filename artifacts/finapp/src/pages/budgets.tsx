@@ -1,13 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, Budget } from '../services/db';
 import { useAppContext } from '../context/AppContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Info, Plus, Trash2, PieChart } from 'lucide-react';
+import { Plus, Trash2, PieChart } from 'lucide-react';
 import InfoModal from '../components/InfoModal';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import AddCategoryModal from '../components/AddCategoryModal';
+import { useToast } from '@/hooks/use-toast';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -15,10 +17,11 @@ import {
 
 export default function Budgets() {
   const { settings } = useAppContext();
+  const { toast } = useToast();
   const defaultCurrency = settings?.defaultCurrency || 'EUR';
   const now = new Date();
-  const [showInfo, setShowInfo] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [showAddCat, setShowAddCat] = useState(false);
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [categorie, setCategorie] = useState('');
   const [plafond, setPlafond] = useState('');
@@ -28,6 +31,67 @@ export default function Budgets() {
   const budgets = useLiveQuery(() => db.budgets.toArray()) || [];
   const transactions = useLiveQuery(() => db.transactions.toArray()) || [];
   const categories = useLiveQuery(() => db.categories.where('type').equals('depense').filter(c => !c.parentId).toArray()) || [];
+
+  // Auto-rollover and budget reset celebration
+  useEffect(() => {
+    if (budgets.length === 0 || transactions.length === 0) return;
+
+    const checkRollover = async () => {
+      const now = new Date();
+      const currentM = now.getMonth() + 1;
+      const currentY = now.getFullYear();
+
+      const prevDate = new Date();
+      prevDate.setMonth(prevDate.getMonth() - 1);
+      const prevM = prevDate.getMonth() + 1;
+      const prevY = prevDate.getFullYear();
+
+      const currentMFiles = budgets.filter(b => b.mois === currentM && b.annee === currentY);
+      const prevMFiles = budgets.filter(b => b.mois === prevM && b.annee === prevY);
+
+      if (prevMFiles.length > 0 && currentMFiles.length === 0) {
+        let allRespected = true;
+        
+        for (const b of prevMFiles) {
+          const actual = transactions
+            .filter(t => t.type === 'depense' && t.categorie === b.categorie && new Date(t.date).getMonth() + 1 === prevM && new Date(t.date).getFullYear() === prevY)
+            .reduce((s, t) => s + t.montantConverti, 0);
+          
+          if (actual > b.plafond) {
+            allRespected = false;
+          }
+        }
+
+        // Add budgets for current month
+        for (const b of prevMFiles) {
+          await db.budgets.add({
+            categorie: b.categorie,
+            plafond: b.plafond,
+            montantActuel: 0,
+            mois: currentM,
+            annee: currentY
+          });
+        }
+
+        if (allRespected) {
+          const { triggerConfetti } = await import('../services/confetti');
+          triggerConfetti();
+          toast({
+            title: "🏆 Objectif Atteint !",
+            description: "Félicitations ! Vous avez respecté tous vos budgets le mois dernier. Confettis ! 🎉",
+          });
+        } else {
+          toast({
+            title: "📈 Nouveau Mois",
+            description: "Vos budgets ont été réinitialisés pour le nouveau mois. C'est reparti pour un tour ! 💪",
+          });
+        }
+      }
+    };
+
+    checkRollover();
+  }, [budgets, transactions, toast]);
+
 
   // Compute actual spending per category/month
   const getActual = (categorieName: string, m: number, y: number) => {
@@ -62,9 +126,7 @@ export default function Budgets() {
           <Button size="sm" onClick={() => setShowAdd(true)} data-testid="btn-add-budget">
             <Plus className="h-4 w-4 mr-1" /> Nouveau
           </Button>
-          <Button variant="ghost" size="icon" onClick={() => setShowInfo(true)} data-testid="btn-info">
-            <Info className="h-4 w-4" />
-          </Button>
+          <InfoModal title="Budgets" description="Définissez des plafonds par catégorie et suivez vos dépenses. La barre passe en rouge quand le budget est dépassé." />
         </div>
       </header>
 
@@ -109,9 +171,9 @@ export default function Budgets() {
         </div>
       )}
 
-      <InfoModal open={showInfo} onClose={() => setShowInfo(false)} title="Budgets" description="Définissez des plafonds par catégorie et suivez vos dépenses. La barre passe en rouge quand le budget est dépassé." />
+      {/* Tooltip in header */}
 
-      <Dialog open={showAdd} onOpenChange={o => !o && setShowAdd(false)}>
+      <Dialog open={showAdd && !showAddCat} onOpenChange={o => !o && setShowAdd(false)}>
         <DialogContent className="animate-zoomIn bg-card/95 backdrop-blur-xl border-card-border sm:max-w-sm">
           <DialogHeader><DialogTitle>Nouveau budget</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
@@ -125,6 +187,13 @@ export default function Budgets() {
                 <option value="">Sélectionner...</option>
                 {categories.map(c => <option key={c.id} value={c.nom}>{c.emoji} {c.nom}</option>)}
               </select>
+              <button
+                type="button"
+                onClick={() => setShowAddCat(true)}
+                className="w-full mt-1.5 py-1.5 rounded-lg border border-dashed border-primary/50 text-primary text-xs hover:bg-primary/5 transition-all text-center"
+              >
+                + Nouvelle catégorie
+              </button>
             </div>
             <div className="space-y-1">
               <Label>Plafond ({defaultCurrency})</Label>
@@ -160,6 +229,17 @@ export default function Budgets() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <AddCategoryModal
+        open={showAddCat}
+        onClose={() => setShowAddCat(false)}
+        defaultType="depense"
+        onCreated={(cat) => {
+          if (cat.type === 'depense') {
+            setCategorie(cat.nom);
+          }
+        }}
+      />
     </div>
   );
 }

@@ -110,9 +110,13 @@
     @apply border-border;
   }
   body {
-    @apply font-sans antialiased bg-background text-foreground;
+    @apply font-sans antialiased text-foreground;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    /* Animated Mesh Gradient Background */
+    background: linear-gradient(-45deg, hsl(var(--background)), hsl(var(--card)), hsl(var(--muted)), hsl(var(--background)));
+    background-size: 400% 400%;
+    animation: gradientMesh 15s ease infinite;
   }
   ::-webkit-scrollbar { width: 4px; height: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -121,6 +125,13 @@
 }
 
 /* ═══════════════════════ ANIMATIONS ═══════════════════════ */
+
+/* Dynamic Mesh Background */
+@keyframes gradientMesh {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
 
 /* Page transitions */
 @keyframes fadeUp {
@@ -250,4 +261,20 @@
     hsl(243 55% 15%) 55%,
     hsl(263 48% 13%) 100%
   );
+}
+
+/* Biometric scanner loading animation */
+@keyframes widthGrow {
+  from { width: 0%; }
+  to   { width: 100%; }
+}
+.animate-widthGrow { animation: widthGrow 1.8s linear forwards; }
+
+/* Horizontal scrollbar hiding utility */
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
