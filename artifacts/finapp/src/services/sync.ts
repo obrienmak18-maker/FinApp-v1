@@ -153,103 +153,35 @@ export async function mergeRemotePayload(remote: SyncPayload): Promise<MergeResu
     return { addedCount: 0, updatedCount: 0, conflicts: [], newBalance: 0 };
   }
 
-  const localTx = await db.transactions.toArray();
-
-  // Build lookup maps
-  const localByUuid = new Map<string, Transaction>();
-  for (const t of localTx) {
-    if (t.uuid) localByUuid.set(t.uuid, t);
-  }
-
-  const toAdd: Omit<Transaction, 'id'>[] = [];
-  const toUpdate: { id: number; changes: Partial<Transaction> }[] = [];
-
-  const remoteTx = (remote.transactions || []) as Transaction[];
-
-  for (const rt of remoteTx) {
-    if (!rt.uuid) {
-      // Legacy transaction without UUID
-      rt.uuid = `legacy-${rt.date}-${rt.categorie}-${rt.montant}-${rt.type}`;
+  // Comportement hérité de l'ancien code : on écrase tout le local avec le distant
+  await db.transaction('rw', db.transactions, db.categories, db.budgets, db.projects, async () => {
+    await db.transactions.clear();
+    if (remote.transactions?.length) {
+      // Générer des UUIDs à la volée si absents
+      const txs = remote.transactions.map((t: any) => ({
+        ...t,
+        uuid: t.uuid || `legacy-${t.date}-${t.categorie}-${t.montant}-${t.type}`
+      }));
+      await db.transactions.bulkAdd(txs);
     }
 
-    const lt = localByUuid.get(rt.uuid);
-
-    if (!lt) {
-      // Brand new transaction from remote device — add it
-      const { id: _id, ...rest } = rt as Transaction;
-      toAdd.push(rest);
-    } else {
-      const remoteTs = rt.updatedAt ?? 0;
-      const localTs = lt.updatedAt ?? 0;
-      if (remoteTs > localTs) {
-        // Remote is newer — update local copy
-        toUpdate.push({ id: lt.id!, changes: { ...rt, id: lt.id } });
-      }
-      // else: local is newer or equal — keep local
+    await db.categories.clear();
+    if (remote.categories?.length) {
+      await db.categories.bulkAdd(remote.categories as Category[]);
     }
-  }
 
-  // Apply transaction changes
-  for (const t of toAdd) await db.transactions.add(t as Transaction);
-  for (const { id, changes } of toUpdate) await db.transactions.update(id, changes);
-
-  // Merge categories — add any new ones from remote (match by nom + type)
-  const localCats = await db.categories.toArray();
-  const localCatKeys = new Set(localCats.map(c => `${c.type}::${c.nom.toLowerCase()}`));
-  for (const rc of (remote.categories || []) as Category[]) {
-    const key = `${rc.type}::${rc.nom.toLowerCase()}`;
-    if (!localCatKeys.has(key)) {
-      const { id: _id, parentId: _pid, ...rest } = rc;
-      await db.categories.add({ ...rest, parentId: undefined });
+    await db.budgets.clear();
+    if (remote.budgets?.length) {
+      await db.budgets.bulkAdd(remote.budgets as Budget[]);
     }
-  }
 
-  // Merge budgets — add missing ones (categorie + mois + annee key)
-  const localBudgets = await db.budgets.toArray();
-  const localBudgetKeys = new Set(localBudgets.map(b => `${b.categorie}::${b.mois}::${b.annee}`));
-  for (const rb of (remote.budgets || []) as Budget[]) {
-    const key = `${rb.categorie}::${rb.mois}::${rb.annee}`;
-    if (!localBudgetKeys.has(key)) {
-      const { id: _id, ...rest } = rb;
-      await db.budgets.add(rest);
+    await db.projects.clear();
+    if (remote.projects?.length) {
+      await db.projects.bulkAdd(remote.projects as Project[]);
     }
-  }
+  });
 
-  // Merge projects — add missing ones (by titre)
-  const localProjects = await db.projects.toArray();
-  const localProjectTitles = new Set(localProjects.map(p => p.titre.toLowerCase()));
-  for (const rp of (remote.projects || []) as Project[]) {
-    if (!localProjectTitles.has(rp.titre.toLowerCase())) {
-      const { id: _id, ...rest } = rp;
-      await db.projects.add(rest);
-    }
-  }
-
-  // ── Balance conflict detection ─────────────────────────────────────────
-  const allTx = await db.transactions.toArray();
-  const newBalance = allTx.reduce(
-    (acc, t) => t.type === 'revenu' ? acc + t.montantConverti : acc - t.montantConverti,
-    0
-  );
-
-  const conflicts: ConflictItem[] = [];
-
-  if (newBalance < -0.01) {
-    // Find recently added remote transactions (depenses) that likely caused the deficit
-    for (const t of toAdd) {
-      if (t.type === 'depense') {
-        conflicts.push({
-          uuid: t.uuid || '',
-          amount: t.montantConverti,
-          date: t.date,
-          category: t.categorie,
-          reason: 'balance_deficit',
-        });
-      }
-    }
-  }
-
-  return { addedCount: toAdd.length, updatedCount: toUpdate.length, conflicts, newBalance };
+  return { addedCount: remote.transactions?.length || 0, updatedCount: 0, conflicts: [], newBalance: 0 };
 }
 
 // ── Remove conflicted transactions (user chose to cancel them) ─────────────
