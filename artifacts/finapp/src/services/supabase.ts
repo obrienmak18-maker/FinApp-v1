@@ -16,17 +16,17 @@ export const SUPABASE_AVAILABLE = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
    (https://supabase.com/dashboard/project/pjrwkppngrpkaedfuunh/sql/new)
 
    -- Persistent sync groups (never expires)
-   create table if not exists public.finapp_sync_groups (
-     group_id   text        primary key,
+   create table if not exists public.sync_sessions (
+     session_id   text        primary key,
      payload    jsonb       not null default '{}'::jsonb,
      updated_at timestamptz not null default now()
    );
-   alter table public.finapp_sync_groups enable row level security;
-   create policy "allow_all_sync_groups"
-     on public.finapp_sync_groups for all using (true) with check (true);
+   alter table public.sync_sessions enable row level security;
+   create policy "allow_all_sync_sessions"
+     on public.sync_sessions for all using (true) with check (true);
 
    -- Enable Realtime for instant sync
-   alter publication supabase_realtime add table public.finapp_sync_groups;
+   alter publication supabase_realtime add table public.sync_sessions;
 ───────────────────────────────────────────────────────────────────── */
 
 export type SyncPayload = {
@@ -41,7 +41,7 @@ export type SyncPayload = {
 export class SupabaseSetupError extends Error {
   readonly setupRequired = true;
   constructor() {
-    super('Table finapp_sync_groups introuvable. Veuillez exécuter le SQL de configuration.');
+    super('Table sync_sessions introuvable. Veuillez exécuter le SQL de configuration.');
   }
 }
 
@@ -50,8 +50,8 @@ export async function supabaseCheckReady(): Promise<boolean> {
   if (!supabase) return false;
   try {
     const { error } = await supabase
-      .from('finapp_sync_groups')
-      .select('group_id')
+      .from('sync_sessions')
+      .select('session_id')
       .limit(1);
     if (!error || error.code === 'PGRST116') return true;
     return false;
@@ -66,10 +66,10 @@ export async function supabasePushGroup(groupId: string, payload: SyncPayload): 
   const ready = await supabaseCheckReady();
   if (!ready) throw new SupabaseSetupError();
   const { error } = await supabase
-    .from('finapp_sync_groups')
+    .from('sync_sessions')
     .upsert(
-      { group_id: groupId, payload, updated_at: new Date().toISOString() },
-      { onConflict: 'group_id' }
+      { session_id: groupId, payload, updated_at: new Date().toISOString() },
+      { onConflict: 'session_id' }
     );
   if (error) throw new Error(error.message);
 }
@@ -80,9 +80,9 @@ export async function supabasePullGroup(groupId: string): Promise<SyncPayload | 
   const ready = await supabaseCheckReady();
   if (!ready) throw new SupabaseSetupError();
   const { data, error } = await supabase
-    .from('finapp_sync_groups')
+    .from('sync_sessions')
     .select('payload')
-    .eq('group_id', groupId)
+    .eq('session_id', groupId)
     .single();
   if (error) {
     if (error.code === 'PGRST116') return null;
@@ -105,8 +105,8 @@ export function supabaseSubscribeGroup(
       {
         event: 'UPDATE',
         schema: 'public',
-        table: 'finapp_sync_groups',
-        filter: `group_id=eq.${groupId}`,
+        table: 'sync_sessions',
+        filter: `session_id=eq.${groupId}`,
       },
       (pg) => {
         const p = (pg.new as { payload?: SyncPayload })?.payload;
@@ -118,8 +118,8 @@ export function supabaseSubscribeGroup(
       {
         event: 'INSERT',
         schema: 'public',
-        table: 'finapp_sync_groups',
-        filter: `group_id=eq.${groupId}`,
+        table: 'sync_sessions',
+        filter: `session_id=eq.${groupId}`,
       },
       (pg) => {
         const p = (pg.new as { payload?: SyncPayload })?.payload;

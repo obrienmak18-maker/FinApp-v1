@@ -98,7 +98,7 @@ export async function pushGroup(groupId: string): Promise<void> {
   }
 
   // Firebase fallback
-  await set(ref(firebaseDb, `groups/${groupId}`), sanitizeForFirebase(payload));
+  await set(ref(firebaseDb, `sessions/${groupId}`), sanitizeForFirebase(payload));
 }
 
 // ── Pull remote data from cloud ────────────────────────────────────────────
@@ -112,7 +112,7 @@ export async function pullGroup(groupId: string): Promise<SyncPayload | null> {
     }
   }
 
-  const snap = await get(ref(firebaseDb, `groups/${groupId}`));
+  const snap = await get(ref(firebaseDb, `sessions/${groupId}`));
   return snap.exists() ? (snap.val() as SyncPayload) : null;
 }
 
@@ -133,7 +133,7 @@ export async function subscribeToGroup(
 
   // Firebase fallback — onValue fires immediately + on any change
   const myDeviceId = getDeviceId();
-  const unsub = onValue(ref(firebaseDb, `groups/${groupId}`), (snap) => {
+  const unsub = onValue(ref(firebaseDb, `sessions/${groupId}`), (snap) => {
     if (!snap.exists()) return;
     const data = snap.val() as SyncPayload;
     // Skip our own pushes
@@ -167,7 +167,10 @@ export async function mergeRemotePayload(remote: SyncPayload): Promise<MergeResu
   const remoteTx = (remote.transactions || []) as Transaction[];
 
   for (const rt of remoteTx) {
-    if (!rt.uuid) continue;
+    if (!rt.uuid) {
+      // Legacy transaction without UUID
+      rt.uuid = `legacy-${rt.date}-${rt.categorie}-${rt.montant}-${rt.type}`;
+    }
 
     const lt = localByUuid.get(rt.uuid);
 
