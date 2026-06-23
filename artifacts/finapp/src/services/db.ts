@@ -10,6 +10,7 @@ export interface Settings {
   aiPreferences: string;
   syncGroupId?: string;   // persistent sync group ID (set once, never expires)
   biometricsEnabled?: boolean;
+  biometricCredentialId?: string;
 }
 
 export interface Transaction {

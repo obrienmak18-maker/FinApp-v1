@@ -10,6 +10,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
+import { registerBiometrics } from '../services/webauthn';
 
 const CURRENCIES = ['EUR', 'USD', 'GBP', 'CHF', 'CDF', 'XAF', 'MAD', 'TND', 'CAD'];
 
@@ -192,13 +193,31 @@ export default function Settings() {
             </div>
             <button
               onClick={async () => {
-                await updateSettings({ biometricsEnabled: !settings.biometricsEnabled });
-                toast({
-                  title: !settings.biometricsEnabled ? "Biométrie activée" : "Biométrie désactivée",
-                  description: !settings.biometricsEnabled 
-                    ? "Vous pouvez maintenant utiliser l'empreinte/visage pour déverrouiller." 
-                    : "Déverrouillage biométrique désactivé."
-                });
+                if (!settings.biometricsEnabled) {
+                  try {
+                    const credentialId = await registerBiometrics(settings.username || 'FinApp User');
+                    await updateSettings({ 
+                      biometricsEnabled: true,
+                      biometricCredentialId: credentialId 
+                    });
+                    toast({
+                      title: "Biométrie activée",
+                      description: "Vous pouvez maintenant utiliser l'empreinte/visage pour déverrouiller."
+                    });
+                  } catch (e: any) {
+                    toast({
+                      title: "Erreur",
+                      description: e.message || "Impossible d'activer la biométrie.",
+                      variant: "destructive"
+                    });
+                  }
+                } else {
+                  await updateSettings({ biometricsEnabled: false, biometricCredentialId: undefined });
+                  toast({
+                    title: "Biométrie désactivée",
+                    description: "Déverrouillage biométrique désactivé."
+                  });
+                }
               }}
               className={`w-11 h-6 rounded-full transition-colors relative ${settings.biometricsEnabled ? 'bg-primary' : 'bg-muted'}`}
             >

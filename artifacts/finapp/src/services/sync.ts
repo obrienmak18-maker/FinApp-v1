@@ -22,6 +22,7 @@ import {
   supabasePushGroup,
   supabasePullGroup,
   supabaseSubscribeGroup,
+  supabaseCheckReady,
   SyncPayload,
 } from './supabase';
 import { firebaseDb, ref, set, get, onValue, sanitizeForFirebase } from './firebase';
@@ -117,12 +118,17 @@ export async function pullGroup(groupId: string): Promise<SyncPayload | null> {
 
 // ── Real-time subscription ─────────────────────────────────────────────────
 
-export function subscribeToGroup(
+export async function subscribeToGroup(
   groupId: string,
   onUpdate: (payload: SyncPayload) => void
-): () => void {
+): Promise<() => void> {
   if (SUPABASE_AVAILABLE && supabase) {
-    return supabaseSubscribeGroup(groupId, onUpdate);
+    const ready = await supabaseCheckReady();
+    if (ready) {
+      return supabaseSubscribeGroup(groupId, onUpdate);
+    } else {
+      console.warn('[sync] Supabase not ready for subscribe, falling back to Firebase');
+    }
   }
 
   // Firebase fallback — onValue fires immediately + on any change

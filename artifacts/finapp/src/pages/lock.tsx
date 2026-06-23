@@ -4,6 +4,7 @@ import { useAppContext } from '../context/AppContext';
 import { Button } from '@/components/ui/button';
 import { Fingerprint, Lock, ShieldAlert } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { authenticateBiometrics } from '../services/webauthn';
 
 export default function LockScreen() {
   const { settings, setIsLocked } = useAppContext();
@@ -65,9 +66,9 @@ export default function LockScreen() {
     }
   };
 
-  const handleBiometrics = () => {
+  const handleBiometrics = async () => {
     if (lockoutTime > 0) return;
-    if (!settings?.biometricsEnabled) {
+    if (!settings?.biometricsEnabled || !settings?.biometricCredentialId) {
       toast({
         title: "Connexion biométrique",
         description: "Veuillez activer la connexion biométrique (empreinte / visage) dans les Paramètres.",
@@ -75,13 +76,27 @@ export default function LockScreen() {
       });
       return;
     }
-    setScanning(true);
-    setTimeout(() => {
-      setScanning(false);
-      if (navigator.vibrate) navigator.vibrate(100);
-      setIsLocked(false);
-      navigate('/dashboard');
-    }, 1800);
+    
+    try {
+      const success = await authenticateBiometrics(settings.biometricCredentialId);
+      if (success) {
+        if (navigator.vibrate) navigator.vibrate(100);
+        setIsLocked(false);
+        navigate('/dashboard');
+      } else {
+        toast({
+          title: "Échec",
+          description: "La vérification biométrique a échoué.",
+          variant: "destructive",
+        });
+      }
+    } catch (e) {
+      toast({
+        title: "Erreur",
+        description: "Erreur lors de la vérification biométrique.",
+        variant: "destructive",
+      });
+    }
   };
 
   return (
@@ -170,27 +185,7 @@ export default function LockScreen() {
         </div>
       </div>
 
-      {/* High-fidelity Biometric scanning overlay */}
-      {scanning && (
-        <div className="fixed inset-0 bg-background/85 backdrop-blur-md flex items-center justify-center z-50 animate-fadeIn">
-          <div className="w-72 p-8 bg-card/95 border border-card-border rounded-3xl shadow-2xl flex flex-col items-center justify-center space-y-6 text-center animate-zoomIn relative">
-            <div className="absolute -inset-1 bg-gradient-to-tr from-primary to-transparent opacity-10 rounded-3xl blur-md pointer-events-none" />
-            <div className="relative">
-              <div className="w-24 h-24 bg-primary/15 rounded-full flex items-center justify-center border-2 border-primary/40 animate-pulse">
-                <Fingerprint className="h-12 w-12 text-primary animate-bounce" />
-              </div>
-              <div className="absolute -inset-2 bg-primary/10 rounded-full blur-lg animate-pulse" />
-            </div>
-            <div>
-              <p className="font-semibold text-lg">Scan biométrique</p>
-              <p className="text-xs text-muted-foreground mt-1 leading-relaxed">Vérification de l'identité en cours...</p>
-            </div>
-            <div className="w-full bg-muted/50 h-1.5 rounded-full overflow-hidden">
-              <div className="bg-primary h-full rounded-full animate-widthGrow" style={{ animationDuration: '1.8s' }} />
-            </div>
-          </div>
-        </div>
-      )}
+
     </div>
   );
 }

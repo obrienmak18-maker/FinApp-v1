@@ -16,6 +16,8 @@ import {
 } from 'lucide-react';
 import InfoModal from '../components/InfoModal';
 import { useToast } from '@/hooks/use-toast';
+import { useNavigate } from 'react-router-dom';
+import QrScanner from '../components/QrScanner';
 
 // Lazy-load heavy QR libs only when needed
 const LazyQRCode = React.lazy(() =>
@@ -24,17 +26,6 @@ const LazyQRCode = React.lazy(() =>
 
 type SyncStatus = 'idle' | 'syncing' | 'synced' | 'error' | 'conflict';
 type View = 'main' | 'join' | 'qr';
-
-const SETUP_SQL = `-- Run once in Supabase SQL Editor
-create table if not exists public.finapp_sync_groups (
-  group_id   text        primary key,
-  payload    jsonb       not null default '{}'::jsonb,
-  updated_at timestamptz not null default now()
-);
-alter table public.finapp_sync_groups enable row level security;
-create policy "allow_all_sync_groups"
-  on public.finapp_sync_groups for all using (true) with check (true);
-alter publication supabase_realtime add table public.finapp_sync_groups;`;
 
 export default function Sync() {
   const settings = useLiveQuery(() => db.settings.get('user'));
@@ -48,10 +39,9 @@ export default function Sync() {
   const [inputCode, setInputCode] = useState('');
   const [statusMsg, setStatusMsg] = useState('');
   const [copiedCode, setCopiedCode] = useState(false);
-  const [copiedSQL, setCopiedSQL] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
-  const [showSetupSQL, setShowSetupSQL] = useState(false);
   const [conflicts, setConflicts] = useState<ConflictItem[]>([]);
+  const navigate = useNavigate();
   const [mergeResult, setMergeResult] = useState<MergeResult | null>(null);
   const [keepConflicts, setKeepConflicts] = useState<boolean | null>(null);
 
@@ -84,34 +74,37 @@ export default function Sync() {
     // Cleanup old subscription
     if (unsubRef.current) { unsubRef.current(); unsubRef.current = null; }
 
-    const unsub = subscribeToGroup(groupId, async (remotePayload) => {
-      setStatus('syncing');
-      setStatusMsg('Données reçues en temps réel...');
-      try {
-        const result = await mergeRemotePayload(remotePayload);
-        setLastSync(new Date());
-        if (result.conflicts.length > 0) {
-          setConflicts(result.conflicts);
-          setMergeResult(result);
-          setStatus('conflict');
-          setStatusMsg(`⚠️ Conflit — solde négatif détecté (${result.conflicts.length} transaction(s))`);
-        } else {
-          setStatus('synced');
-          const msg = result.addedCount > 0
-            ? `${result.addedCount} nouvelle(s) transaction(s) reçue(s) ✓`
-            : 'Données à jour ✓';
-          setStatusMsg(msg);
-          if (result.addedCount > 0) {
-            toast({ title: '⚡ Sync temps réel', description: `${result.addedCount} transaction(s) synchronisée(s)` });
+    const initSub = async () => {
+      const unsub = await subscribeToGroup(groupId, async (remotePayload) => {
+        setStatus('syncing');
+        setStatusMsg('Données reçues en temps réel...');
+        try {
+          const result = await mergeRemotePayload(remotePayload);
+          setLastSync(new Date());
+          if (result.conflicts.length > 0) {
+            setConflicts(result.conflicts);
+            setMergeResult(result);
+            setStatus('conflict');
+            setStatusMsg(`⚠️ Conflit — solde négatif détecté (${result.conflicts.length} transaction(s))`);
+          } else {
+            setStatus('synced');
+            const msg = result.addedCount > 0
+              ? `${result.addedCount} nouvelle(s) transaction(s) reçue(s) ✓`
+              : 'Données à jour ✓';
+            setStatusMsg(msg);
+            if (result.addedCount > 0) {
+              toast({ title: '⚡ Sync temps réel', description: `${result.addedCount} transaction(s) synchronisée(s)` });
+            }
           }
+        } catch (e) {
+          setStatus('error');
+          setStatusMsg('Erreur lors de la synchronisation: ' + String(e));
         }
-      } catch (e) {
-        setStatus('error');
-        setStatusMsg('Erreur lors de la synchronisation: ' + String(e));
-      }
-    });
+      });
+      unsubRef.current = unsub;
+    };
+    initSub();
 
-    unsubRef.current = unsub;
     return () => { if (unsubRef.current) { unsubRef.current(); unsubRef.current = null; } };
   }, [groupId, isOnline]); // eslint-disable-line
 
@@ -162,8 +155,8 @@ export default function Sync() {
   };
 
   // ── Join existing group ───────────────────────────────────────────────────
-  const handleJoinGroup = async () => {
-    const code = inputCode.trim().toUpperCase();
+  const handleJoinGroup = async (codeOverride?: string) => {
+    const code = (codeOverride || inputCode).trim().toUpperCase();
     if (!code) return;
     setStatus('syncing');
     setStatusMsg('Connexion au groupe...');
@@ -188,6 +181,7 @@ export default function Sync() {
         setStatus('synced');
         setStatusMsg(`Groupe rejoint ! ${result.addedCount} transaction(s) importée(s) ✓`);
         toast({ title: '✅ Groupe rejoint', description: `${result.addedCount} transaction(s) importée(s)` });
+        setTimeout(() => navigate('/dashboard'), 1500);
       }
     } catch (e) {
       setStatus('error');
@@ -230,12 +224,6 @@ export default function Sync() {
     await navigator.clipboard.writeText(groupId);
     setCopiedCode(true);
     setTimeout(() => setCopiedCode(false), 2000);
-  };
-
-  const copySQL = async () => {
-    await navigator.clipboard.writeText(SETUP_SQL);
-    setCopiedSQL(true);
-    setTimeout(() => setCopiedSQL(false), 2000);
   };
 
   // ── Status indicator ──────────────────────────────────────────────────────
@@ -367,23 +355,6 @@ export default function Sync() {
               </Button>
             </div>
           </div>
-
-          {/* Supabase SQL setup helper */}
-          {SUPABASE_AVAILABLE && (
-            <details className="glass rounded-2xl p-4 text-xs text-muted-foreground">
-              <summary className="cursor-pointer font-medium text-amber-400 flex items-center gap-1.5">
-                <AlertTriangle className="h-3.5 w-3.5" />
-                Configuration Supabase requise
-              </summary>
-              <p className="mt-2 mb-2 leading-relaxed">Exécutez ce SQL une seule fois dans votre <a href="https://supabase.com/dashboard/project/pjrwkppngrpkaedfuunh/sql/new" target="_blank" rel="noopener noreferrer" className="text-primary underline">SQL Editor Supabase</a> :</p>
-              <div className="relative">
-                <pre className="bg-zinc-950/80 rounded-xl p-3 text-emerald-300 overflow-x-auto leading-relaxed">{SETUP_SQL}</pre>
-                <button onClick={copySQL} className="absolute top-2 right-2 p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700">
-                  {copiedSQL ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
-                </button>
-              </div>
-            </details>
-          )}
         </div>
       )}
 
@@ -395,25 +366,35 @@ export default function Sync() {
           </Button>
           <div className="glass rounded-2xl p-5 space-y-4">
             <div className="text-center space-y-1">
-              <KeyRound className="h-8 w-8 text-primary mx-auto mb-2" />
-              <p className="font-semibold">Entrez le code du groupe</p>
-              <p className="text-xs text-muted-foreground">Format: FIN-XXXXXX</p>
+              <QrCode className="h-8 w-8 text-primary mx-auto mb-2" />
+              <p className="font-semibold">Scanner un QR Code</p>
             </div>
-            <Input
-              value={inputCode}
-              onChange={e => setInputCode(e.target.value.toUpperCase())}
-              placeholder="FIN-AB3CD7"
-              className="font-mono text-center text-lg tracking-widest"
-              data-testid="input-group-code"
-            />
-            <Button
-              onClick={handleJoinGroup}
-              disabled={!inputCode.trim() || status === 'syncing' || !isOnline}
-              className="w-full"
-              data-testid="btn-confirm-join"
-            >
-              {status === 'syncing' ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Connexion...</> : 'Rejoindre le groupe'}
-            </Button>
+            
+            <div className="border border-card-border rounded-xl overflow-hidden bg-black/5 p-2">
+               <QrScanner 
+                 onScan={(text) => handleJoinGroup(text)} 
+                 onError={(err) => console.log(err)} 
+               />
+            </div>
+
+            <div className="text-center pt-2">
+              <p className="text-xs text-muted-foreground mb-2">Ou entrer le code manuellement</p>
+              <Input
+                value={inputCode}
+                onChange={e => setInputCode(e.target.value.toUpperCase())}
+                placeholder="FIN-AB3CD7"
+                className="font-mono text-center text-lg tracking-widest mb-2"
+                data-testid="input-group-code"
+              />
+              <Button
+                onClick={() => handleJoinGroup()}
+                disabled={!inputCode.trim() || status === 'syncing' || !isOnline}
+                className="w-full"
+                data-testid="btn-confirm-join"
+              >
+                {status === 'syncing' ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Connexion...</> : 'Rejoindre avec le code'}
+              </Button>
+            </div>
             {!isOnline && <p className="text-xs text-center text-amber-400">Connexion internet requise pour rejoindre un groupe</p>}
           </div>
         </div>
